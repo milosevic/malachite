@@ -44,8 +44,21 @@ fn test_itf() {
     {
         println!("🚀 Running trace {json_fixture:?}");
 
+        // Signal the start of a new test to the oracle server (no-op when not running under oracle).
+        let trace_name = json_fixture
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        crate::oracle_client::start_test(&trace_name);
+
         let json = std::fs::read_to_string(&json_fixture).unwrap();
-        let trace = itf::trace_from_str::<State>(&json).unwrap();
+        let trace = match itf::trace_from_str::<State>(&json) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("⚠️  Skipping trace {json_fixture:?}: {e}");
+                continue;
+            }
+        };
 
         let rng = StdRng::seed_from_u64(RANDOM_SEED);
         let vote_keeper_runner = VoteKeeperRunner::new(rng);

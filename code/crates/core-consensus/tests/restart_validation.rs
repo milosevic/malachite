@@ -187,7 +187,10 @@ fn restart_with_polka_certificate() {
     let metrics = Metrics::new();
     let mut state_normal = make_state(&validators, v3);
     let mut cap_normal = Captured::default();
+    let oracle_pre_crash =
+        quint_oracle::register_test("restart_with_polka_certificate::pre_crash");
     drive(&mut state_normal, inputs, &mut cap_normal, &metrics);
+    drop(oracle_pre_crash);
 
     // Sanity: v3 emitted the pre-crash Prevote(value, r=1).
     assert!(
@@ -219,7 +222,9 @@ fn restart_with_polka_certificate() {
     let metrics = Metrics::new();
     let mut state_replay = make_state(&validators, v3);
     let mut cap_replay = Captured::default();
+    let oracle_replay = quint_oracle::register_test("restart_with_polka_certificate::wal_replay");
     drive(&mut state_replay, replay_inputs, &mut cap_replay, &metrics);
+    drop(oracle_replay);
 
     // The published-vote sets must be equal: WAL replay deterministically
     // re-derives every pre-crash vote (timeouts are WAL'd, so on replay they

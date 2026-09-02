@@ -434,3 +434,48 @@ fn verify_wal_recovery(wal: &mut Log, expected_len: usize) -> io::Result<()> {
     }
     Ok(())
 }
+
+/// reproduces obs:oversized_entry_written — fails on current code.
+///
+/// The read path (`LogEntry::read_to_next`) rejects any entry whose stored
+/// length exceeds `MAX_ENTRY_SIZE` (1 GiB) with `InvalidData`, but the write
+/// path (`Log::write_entry`) applies no such bound. So `append` happily makes
+/// an entry durable that no reader can ever read back, and because the reader
+/// stops at the first error, every later entry is lost with it.
+///
+/// Driven through the crate's public production API: `Log::open` + `append`,
+/// default features, exactly as the engine's WAL uses it.
+///
+/// Ignored because it writes just over 1 GiB to disk.
+#[test]
+#[ignore]
+fn oversized_entry_is_rejected_by_append() -> io::Result<()> {
+    let path = testwal!();
+
+    let mut wal = Log::open(&path)?;
+
+    // A healthy entry first, as a real log would already hold.
+    wal.append(b"entry1")?;
+
+    // One byte past the maximum the reader will accept (`MAX_ENTRY_SIZE`, 1 GiB,
+    // is private to the crate, so the bound is restated here).
+    const MAX_ENTRY_SIZE: usize = 1024 * 1024 * 1024;
+    let oversized = vec![0u8; MAX_ENTRY_SIZE + 1];
+
+    // The contract: an entry the log can never read back must not become durable.
+    assert!(
+        wal.append(&oversized).is_err(),
+        "append accepted an entry larger than MAX_ENTRY_SIZE"
+    );
+
+    wal.flush()?;
+    drop(wal);
+
+    // And the earlier entry must still be replayable.
+    let mut wal = Log::open(&path)?;
+    let entries: Vec<_> = wal.iter()?.collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(&entries[0], b"entry1");
+
+    Ok(())
+}

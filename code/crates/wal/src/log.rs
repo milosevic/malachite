@@ -14,6 +14,26 @@ use crate::{Storage, Version};
 /// The maximum size of a single log entry in bytes. (1 GiB)
 const MAX_ENTRY_SIZE: usize = 1024 * 1024 * 1024;
 
+/// Assigns a stable, sequential small integer to each WAL file path, so oracle
+/// observations carry a real instance identity instead of a placeholder.
+/// Numbering restarts per test (the harness names each test's thread after the
+/// test), which is also the boundary the oracle records a trace for.
+/// Dead code unless the oracle client is compiled in.
+#[allow(dead_code)]
+fn oracle_path_id(path: &Path) -> usize {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static IDS: OnceLock<Mutex<HashMap<String, HashMap<PathBuf, usize>>>> = OnceLock::new();
+
+    let owner = std::thread::current().name().unwrap_or("").to_owned();
+
+    let mut ids = IDS.get_or_init(Default::default).lock().unwrap();
+    let per_test = ids.entry(owner).or_default();
+    let next = per_test.len();
+    *per_test.entry(path.to_owned()).or_insert(next)
+}
+
 /// Represents a single entry in the Write-Ahead Log (WAL).
 ///
 /// Each entry has the following format on disk:
@@ -246,11 +266,26 @@ where
         // If file exists and has content
         if size > 0 {
             // Read and validate version number
-            let version = Version::try_from(read_u32(&mut storage)?)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid WAL version"))?;
+            let version = Version::try_from(read_u32(&mut storage)?).map_err(|_| {
+                quint_oracle::log!(
+                    Logopen,
+                    path: (oracle_path_id(&path)) @ PATHS,
+                    ok: false,
+                    len: 0 @ LENS,
+                    [wal],
+                );
+                io::Error::new(io::ErrorKind::InvalidData, "Invalid WAL version")
+            })?;
 
             // Read sequence number
             let sequence = read_u64(&mut storage).map_err(|_| {
+                quint_oracle::log!(
+                    Logopen,
+                    path: (oracle_path_id(&path)) @ PATHS,
+                    ok: false,
+                    len: 0 @ LENS,
+                    [wal],
+                );
                 io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "Failed to read sequence number",
@@ -302,6 +337,14 @@ where
             storage.truncate_to(pos)?;
             storage.sync_all()?;
 
+            quint_oracle::log!(
+                Logopen,
+                path: (oracle_path_id(&path)) @ PATHS,
+                ok: true,
+                %len @ LENS,
+                [wal],
+            );
+
             return Ok(Self {
                 version,
                 storage,
@@ -325,6 +368,14 @@ where
 
         // Ensure header is persisted to disk
         storage.sync_all()?;
+
+        quint_oracle::log!(
+            Logopen,
+            path: (oracle_path_id(&path)) @ PATHS,
+            ok: true,
+            len: 0 @ LENS,
+            [wal],
+        );
 
         Ok(Self {
             version,
@@ -426,10 +477,30 @@ where
         match result {
             Ok(()) => {
                 self.len += 1;
+
+                quint_oracle::log!(
+                    Logappend__write_raw__write_compressed,
+                    path: (oracle_path_id(&self.path)) @ PATHS,
+                    dataLength: (entry.len()) @ SIZES,
+                    ok: true,
+                    len: (self.len) @ LENS,
+                    [wal],
+                );
+
                 Ok(())
             }
             Err(e) => {
                 self.storage.truncate_to(pos)?;
+
+                quint_oracle::log!(
+                    Logappend__write_raw__write_compressed,
+                    path: (oracle_path_id(&self.path)) @ PATHS,
+                    dataLength: (entry.len()) @ SIZES,
+                    ok: false,
+                    len: (self.len) @ LENS,
+                    [wal],
+                );
+
                 Err(e)
             }
         }
@@ -444,8 +515,24 @@ where
     pub fn first_entry(&mut self) -> io::Result<Option<LogEntry<'_, S>>> {
         // IF the file is empty, return an error
         if self.storage.size_bytes()? == 0 {
+            quint_oracle::log!(
+                Logfirst_entry__iter,
+                path: (oracle_path_id(&self.path)) @ PATHS,
+                ok: false,
+                len: (self.len) @ LENS,
+                [wal],
+            );
+
             return Err(io::Error::new(io::ErrorKind::NotFound, "Empty WAL"));
         }
+
+        quint_oracle::log!(
+            Logfirst_entry__iter,
+            path: (oracle_path_id(&self.path)) @ PATHS,
+            ok: true,
+            len: (self.len) @ LENS,
+            [wal],
+        );
 
         // If there are no entries, return None
         if self.len == 0 {
@@ -466,6 +553,7 @@ where
     pub fn iter(&mut self) -> io::Result<LogIter<'_, S>> {
         Ok(LogIter {
             next: self.first_entry()?,
+            idx: 0,
         })
     }
 
@@ -497,6 +585,14 @@ where
         // Sync changes to disk
         self.storage.sync_all()?;
 
+        quint_oracle::log!(
+            Logreset,
+            path: (oracle_path_id(&self.path)) @ PATHS,
+            %sequence @ HEIGHTS,
+            len: 0 @ LENS,
+            [wal],
+        );
+
         Ok(())
     }
 
@@ -514,6 +610,14 @@ where
     /// * `Err` - If file operations fail
     pub fn truncate(&mut self, from_entry: u64) -> io::Result<()> {
         if from_entry >= self.len as u64 {
+            quint_oracle::log!(
+                Logtruncate,
+                path: (oracle_path_id(&self.path)) @ PATHS,
+                %from_entry @ INDICES,
+                len: (self.len) @ LENS,
+                [wal],
+            );
+
             return Ok(());
         }
 
@@ -561,6 +665,14 @@ where
         // Update entry count
         self.len = from_entry as usize;
 
+        quint_oracle::log!(
+            Logtruncate,
+            path: (oracle_path_id(&self.path)) @ PATHS,
+            %from_entry @ INDICES,
+            len: (self.len) @ LENS,
+            [wal],
+        );
+
         Ok(())
     }
 
@@ -572,7 +684,17 @@ where
     /// * `Ok(())` - Successfully synced to disk
     /// * `Err` - If sync fails
     pub fn flush(&mut self) -> io::Result<()> {
-        self.storage.sync_all()
+        let result = self.storage.sync_all();
+
+        quint_oracle::log!(
+            Logflush,
+            path: (oracle_path_id(&self.path)) @ PATHS,
+            ok: (result.is_ok()),
+            len: (self.len) @ LENS,
+            [wal],
+        );
+
+        result
     }
 
     /// Build a Write-Ahead Log (WAL) from its raw components.
@@ -590,6 +712,14 @@ where
         sequence: u64,
         len: usize,
     ) -> Self {
+        quint_oracle::log!(
+            Logfrom_raw_parts,
+            path: (oracle_path_id(&path)) @ PATHS,
+            %sequence @ HEIGHTS,
+            %len @ LENS,
+            [wal],
+        );
+
         Self {
             storage: file,
             path,
@@ -636,6 +766,9 @@ impl<S> Log<S> {
 pub struct LogIter<'a, F> {
     /// The next entry to be read from the WAL
     next: Option<LogEntry<'a, F>>,
+
+    /// Index of the entry `next()` will read, for oracle observations
+    idx: usize,
 }
 
 /// Iterator over entries in a Write-Ahead Log (WAL)
@@ -660,13 +793,45 @@ where
         let mut buf = Vec::new();
         let next = self.next.take()?;
 
+        let idx = self.idx;
+        let path_id = oracle_path_id(&next.log.path);
+        self.idx += 1;
+
         match next.read_to_next(&mut buf) {
             Ok(Some(entry)) => {
+                quint_oracle::log!(
+                    Logread_entry,
+                    path: (path_id) @ PATHS,
+                    %idx @ INDICES,
+                    ok: true,
+                    [wal],
+                );
+
                 self.next = Some(entry);
                 Some(Ok(buf))
             }
-            Ok(None) => Some(Ok(buf)),
-            Err(e) => Some(Err(e)),
+            Ok(None) => {
+                quint_oracle::log!(
+                    Logread_entry,
+                    path: (path_id) @ PATHS,
+                    %idx @ INDICES,
+                    ok: true,
+                    [wal],
+                );
+
+                Some(Ok(buf))
+            }
+            Err(e) => {
+                quint_oracle::log!(
+                    Logread_entry,
+                    path: (path_id) @ PATHS,
+                    %idx @ INDICES,
+                    ok: false,
+                    [wal],
+                );
+
+                Some(Err(e))
+            }
         }
     }
 }

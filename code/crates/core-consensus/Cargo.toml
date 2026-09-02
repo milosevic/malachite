@@ -20,6 +20,7 @@ metrics = ["std", "dep:malachitebft-metrics"]
 debug = ["std", "malachitebft-core-driver/debug"]
 
 [dependencies]
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 malachitebft-core-types.workspace = true
 malachitebft-core-driver.workspace = true
 malachitebft-core-votekeeper.workspace = true

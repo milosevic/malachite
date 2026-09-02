@@ -90,18 +90,37 @@ where
                     reply_to
                         .send(Ok(Vec::new()))
                         .map_err(|e| eyre!("Failed to send reply: {e}"))?;
+
+                    quint_oracle::log!(
+                        Wal_actor_MsgStartedHeight,
+                        height: (height.as_u64()) @ HEIGHTS,
+                        [wal],
+                    );
+
                     return Ok(());
                 }
 
                 state.height = height;
 
                 self.started_height(state, height, reply_to).await?;
+
+                quint_oracle::log!(
+                    Wal_actor_MsgStartedHeight,
+                    height: (height.as_u64()) @ HEIGHTS,
+                    [wal],
+                );
             }
 
             Msg::Reset(height, reply_to) => {
                 state.height = height;
 
                 self.reset(state, height, reply_to).await?;
+
+                quint_oracle::log!(
+                    Wal_actor_MsgReset,
+                    height: (height.as_u64()) @ HEIGHTS,
+                    [wal],
+                );
             }
 
             Msg::Append(height, entry, reply_to) => {
@@ -114,17 +133,33 @@ where
                     reply_to
                         .send(Ok(()))
                         .map_err(|e| eyre!("Failed to send reply: {e}"))?;
+
+                    quint_oracle::log!(
+                        Wal_actor_MsgAppend,
+                        height: (height.as_u64()) @ HEIGHTS,
+                        [wal],
+                    );
                 } else {
                     self.write_log(state, entry, reply_to).await?;
+
+                    quint_oracle::log!(
+                        Wal_actor_MsgAppend,
+                        height: (height.as_u64()) @ HEIGHTS,
+                        [wal],
+                    );
                 }
             }
 
             Msg::Flush(reply_to) => {
                 self.flush_log(state, reply_to).await?;
+
+                quint_oracle::log!(Wal_actor_MsgFlush, [wal]);
             }
 
             Msg::Dump => {
                 state.wal_sender.send(self::thread::WalMsg::Dump).await?;
+
+                quint_oracle::log!(Wal_actor_MsgDump, [wal]);
             }
         }
 

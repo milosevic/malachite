@@ -19,6 +19,7 @@ borsh = ["dep:borsh"]
 workspace = true
 
 [dependencies]
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 malachitebft-codec.workspace = true
 malachitebft-config.workspace = true
 malachitebft-core-consensus.workspace = true

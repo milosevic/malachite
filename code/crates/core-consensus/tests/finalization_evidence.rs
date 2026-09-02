@@ -222,6 +222,10 @@ fn equivocation_detection_in_finalization_period() {
 
     for test in tests {
         println!("Testing: {}", test.name);
+        let _oracle = quint_oracle::register_test(&format!(
+            "equivocation_detection_in_finalization_period::{}",
+            test.name
+        ));
 
         let validators: Vec<_> = make_validators([1, 1, 1])
             .into_iter()

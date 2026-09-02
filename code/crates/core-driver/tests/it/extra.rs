@@ -11,6 +11,8 @@ use malachitebft_test::{Ed25519Signer, Height, Proposal, TestContext, ValidatorS
 use arc_malachitebft_core_driver::{Driver, Input, Output};
 
 use malachitebft_core_state_machine::state::Step;
+use malachitebft_core_state_machine::state_machine::{self, Info};
+use malachitebft_core_state_machine::input::Input as RoundInput;
 
 use crate::utils::*;
 
@@ -234,7 +236,9 @@ fn driver_steps_decide_previous_with_no_locked_no_valid() {
                 Validity::Valid,
                 v1.address,
             ),
-            expected_outputs: vec![decide_output(Round::new(1), proposal)],
+            // The decision output names round 0: the round the value was proposed in,
+            // the same round recorded in the decided state.
+            expected_outputs: vec![decide_output(Round::new(0), proposal)],
             expected_round: Round::new(1),
             new_state: decided_state(Round::new(1), Round::new(0), value),
         },
@@ -367,7 +371,8 @@ fn driver_steps_decide_previous_with_locked_and_valid() {
         TestStep {
             desc: "v2 precommits for round 0 and same proposal, we get +2/3 precommit, decide",
             input: precommit_input(Round::new(0), value.clone(), &v2.address),
-            expected_outputs: vec![decide_output(Round::new(1), proposal.clone())],
+            // The decision output names round 0, the round the value was proposed in.
+            expected_outputs: vec![decide_output(Round::new(0), proposal.clone())],
             expected_round: Round::new(1),
             new_state: decided_state_with_proposal_and_locked_and_valid(
                 Round::new(1),
@@ -3620,7 +3625,9 @@ fn round_1_decision_during_round_0() {
         TestStep {
             desc: "v2 precommits the same round 1 proposal, we have a decision",
             input: precommit_input(Round::new(1), value.clone(), &v2.address),
-            expected_outputs: vec![decide_output(Round::new(0), proposal)],
+            // The decision output names round 1 — where the proposal lives — even though
+            // we are still at round 0.
+            expected_outputs: vec![decide_output(Round::new(1), proposal)],
             expected_round: Round::new(0),
             new_state: decided_state(Round::new(0), Round::new(1), value),
         },
@@ -3672,7 +3679,9 @@ fn round_1_decision_during_round_0_via_certificate() {
                 value.clone(),
                 &[v1.address, v2.address],
             ),
-            expected_outputs: vec![decide_output(Round::new(0), proposal)],
+            // The decision output names round 1 — where the proposal lives — even though
+            // we are still at round 0.
+            expected_outputs: vec![decide_output(Round::new(1), proposal)],
             expected_round: Round::new(0),
             new_state: decided_state(Round::new(0), Round::new(1), value),
         },
@@ -4255,4 +4264,511 @@ fn check_driver_initial_state(driver: &Driver<TestContext>, height: Height) {
     assert_eq!(driver.proposer_address(), None);
     assert_eq!(driver.proposals().all_rounds().len(), 0);
     assert_eq!(driver.votes().rounds(), 0);
+}
+
+// L28/L29-L30 with a lock on a DIFFERENT value at a LOWER round than the polka round.
+//
+// v1=2, v2=2, v3=3, we are v2.
+// Round 0: we prevote and lock value1 (locked_round = 0).
+// Round 1: a polka for value2 forms (v1 + v3), we never see the proposal so we do not lock it.
+// Round 2: we receive proposal(value2, pol_round = 1).
+//   L29 - locked_round(0) <= valid_round(1) and valid_round(1) < round(2)
+//     L30 - we prevote value2 even though we are locked on value1.
+//
+// This pins the `locked.round <= vr` arm of `prevote_previous`: a rule that only compared
+// the locked value with the proposed value would prevote nil here.
+#[test]
+fn driver_steps_polka_previous_locked_on_other_value_at_lower_round_l30() {
+    let value1 = Value::new(9999);
+    let value2 = Value::new(8888);
+
+    let [(v1, _sk1), (v2, sk2), (v3, _sk3)] = make_validators([2, 2, 3]);
+    let (_my_sk, my_addr) = (sk2, v2.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    let proposal_r0 = Proposal::new(
+        Height::new(1),
+        Round::new(0),
+        value1.clone(),
+        Round::Nil,
+        v1.address,
+    );
+
+    let steps = vec![
+        // Round 0
+        TestStep {
+            desc: "(v2): Starts round 0 (v1 is proposer), starts timeout propose",
+            input: new_round_input(Round::new(0), v1.address),
+            expected_outputs: vec![start_propose_timer_output(Round::new(0))],
+            expected_round: Round::new(0),
+            new_state: propose_state(Round::new(0)),
+        },
+        TestStep {
+            desc: "(v2): Receives proposal(value1) from v1 in round 0, prevotes value1",
+            input: proposal_input(
+                Round::new(0),
+                value1.clone(),
+                Round::Nil,
+                Validity::Valid,
+                v1.address,
+            ),
+            expected_outputs: vec![prevote_output(Round::new(0), value1.clone(), &my_addr)],
+            expected_round: Round::new(0),
+            new_state: prevote_state(Round::new(0)),
+        },
+        TestStep {
+            desc: "(v2): Receives prevote(value1) from v2 (itself) in round 0",
+            input: prevote_input(value1.clone(), &my_addr),
+            expected_outputs: vec![],
+            expected_round: Round::new(0),
+            new_state: prevote_state(Round::new(0)),
+        },
+        TestStep {
+            desc: "(v2): Receives prevote(value1) from v3 in round 0, locks value1 at round 0",
+            input: prevote_input(value1.clone(), &v3.address),
+            expected_outputs: vec![precommit_output(Round::new(0), value1.clone(), &my_addr)],
+            expected_round: Round::new(0),
+            new_state: precommit_state_with_proposal_and_locked_and_valid(
+                Round::new(0),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Receives precommit(value1) from v2 (itself) in round 0",
+            input: precommit_input(Round::new(0), value1.clone(), &my_addr),
+            expected_outputs: vec![],
+            expected_round: Round::new(0),
+            new_state: precommit_state_with_proposal_and_locked_and_valid(
+                Round::new(0),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Receives precommit(nil) from v3 in round 0, starts timeout precommit",
+            input: precommit_nil_input(Round::new(0), &v3.address),
+            expected_outputs: vec![start_precommit_timer_output(Round::new(0))],
+            expected_round: Round::new(0),
+            new_state: precommit_state_with_proposal_and_locked_and_valid(
+                Round::new(0),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Timeout precommit expires in round 0, moves to round 1",
+            input: timeout_precommit_input(Round::new(0)),
+            expected_outputs: vec![new_round_output(Round::new(1))],
+            expected_round: Round::new(1),
+            new_state: new_round_with_proposal_and_locked_and_valid(
+                Round::new(1),
+                proposal_r0.clone(),
+            ),
+        },
+        // Round 1: a polka for value2 forms without us ever seeing the proposal
+        TestStep {
+            desc: "(v2): Starts round 1 (v3 is proposer), starts timeout propose",
+            input: new_round_input(Round::new(1), v3.address),
+            expected_outputs: vec![start_propose_timer_output(Round::new(1))],
+            expected_round: Round::new(1),
+            new_state: propose_state_with_proposal_and_locked_and_valid(
+                Round::new(1),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Timeout propose expires in round 1, prevotes nil",
+            input: timeout_propose_input(Round::new(1)),
+            expected_outputs: vec![prevote_nil_output(Round::new(1), &my_addr)],
+            expected_round: Round::new(1),
+            new_state: prevote_state_with_matching_proposal_and_locked_and_valid(
+                Round::new(1),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Receives prevote(value2) from v1 in round 1",
+            input: prevote_input_at(Round::new(1), value2.clone(), &v1.address),
+            expected_outputs: vec![],
+            expected_round: Round::new(1),
+            new_state: prevote_state_with_matching_proposal_and_locked_and_valid(
+                Round::new(1),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Receives prevote(value2) from v3 in round 1, polka for value2 at round 1",
+            input: prevote_input_at(Round::new(1), value2.clone(), &v3.address),
+            expected_outputs: vec![start_prevote_timer_output(Round::new(1))],
+            expected_round: Round::new(1),
+            new_state: prevote_state_with_matching_proposal_and_locked_and_valid(
+                Round::new(1),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Timeout prevote expires in round 1, precommits nil",
+            input: timeout_prevote_input(Round::new(1)),
+            expected_outputs: vec![precommit_nil_output(Round::new(1), &my_addr)],
+            expected_round: Round::new(1),
+            new_state: precommit_state_with_proposal_and_locked_and_valid(
+                Round::new(1),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Receives precommit(nil) from v2 (itself) in round 1",
+            input: precommit_nil_input(Round::new(1), &my_addr),
+            expected_outputs: vec![],
+            expected_round: Round::new(1),
+            new_state: precommit_state_with_proposal_and_locked_and_valid(
+                Round::new(1),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Receives precommit(nil) from v3 in round 1, starts timeout precommit",
+            input: precommit_nil_input(Round::new(1), &v3.address),
+            expected_outputs: vec![start_precommit_timer_output(Round::new(1))],
+            expected_round: Round::new(1),
+            new_state: precommit_state_with_proposal_and_locked_and_valid(
+                Round::new(1),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Timeout precommit expires in round 1, moves to round 2",
+            input: timeout_precommit_input(Round::new(1)),
+            expected_outputs: vec![new_round_output(Round::new(2))],
+            expected_round: Round::new(2),
+            new_state: new_round_with_proposal_and_locked_and_valid(
+                Round::new(2),
+                proposal_r0.clone(),
+            ),
+        },
+        // Round 2: proposal for value2 with pol_round 1 >= our locked round 0
+        TestStep {
+            desc: "(v2): Starts round 2 (v1 is proposer), starts timeout propose",
+            input: new_round_input(Round::new(2), v1.address),
+            expected_outputs: vec![start_propose_timer_output(Round::new(2))],
+            expected_round: Round::new(2),
+            new_state: propose_state_with_proposal_and_locked_and_valid(
+                Round::new(2),
+                proposal_r0.clone(),
+            ),
+        },
+        TestStep {
+            desc: "(v2): Receives proposal(value2, pol_round=1) from v1 in round 2, \
+                   prevotes value2 although locked on value1 at round 0",
+            input: proposal_input(
+                Round::new(2),
+                value2.clone(),
+                Round::new(1),
+                Validity::Valid,
+                v1.address,
+            ),
+            expected_outputs: vec![prevote_output(Round::new(2), value2.clone(), &my_addr)],
+            expected_round: Round::new(2),
+            // The lock is untouched: still value1 from round 0.
+            new_state: prevote_state_with_matching_proposal_and_locked_and_valid(
+                Round::new(2),
+                proposal_r0.clone(),
+            ),
+        },
+    ];
+
+    run_steps(&mut driver, steps)
+}
+
+// L18: only the proposer for the round may emit a Proposal.
+//
+// We (v3) are not the proposer for round 0 (v1 is). Feeding `ProposeValue` anyway must not
+// produce a `Output::Propose` signed by us; the state machine catches the caller bug with
+// `debug_assert!(info.is_proposer())` and aborts instead.
+//
+// NOTE: this only holds where debug assertions are enabled; in a release build the guard is
+// stripped and a non-proposer would emit a proposal.
+#[test]
+#[should_panic(expected = "info.is_proposer()")]
+fn driver_propose_value_when_not_proposer_panics() {
+    let value = Value::new(9999);
+
+    let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    let steps = vec![
+        TestStep {
+            desc: "Start round 0, v1 is the proposer, we start timeout propose",
+            input: new_round_input(Round::new(0), v1.address),
+            expected_outputs: vec![start_propose_timer_output(Round::new(0))],
+            expected_round: Round::new(0),
+            new_state: propose_state(Round::new(0)),
+        },
+        TestStep {
+            desc: "Feed a value to propose although we are not the proposer",
+            input: Input::ProposeValue(Round::new(0), value.clone()),
+            expected_outputs: vec![],
+            expected_round: Round::new(0),
+            new_state: propose_state(Round::new(0)),
+        },
+    ];
+
+    run_steps(&mut driver, steps)
+}
+
+// L28: a `ProposalAndPolkaPrevious` whose proposal names a round other than the one we are at
+// must be rejected as an invalid transition, not crash the state machine.
+//
+// `prevote_previous` asserts `pol_round < proposal.round()`, so a mis-routed or adversarial
+// proposal carrying a stale round used to abort the process. `is_valid_pol_round` now also
+// compares the POL round against the proposal's own round, so the guard fails and `apply`
+// falls through to the catch-all invalid transition.
+#[test]
+fn state_machine_polka_previous_with_stale_proposal_round_is_invalid() {
+    let [(v1, _sk1), (_v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let ctx = TestContext::new();
+
+    // We are at round 5, waiting for a proposal.
+    let state: State<TestContext> = propose_state(Round::new(5));
+
+    // The proposal's POL round (3) is below our round (5) — the check that used to be the only
+    // one — but it is NOT below the proposal's own round (1). That combination reaches
+    // `prevote_previous`' assertion unless it is rejected here.
+    let proposal = Proposal::new(
+        Height::new(1),
+        Round::new(1),
+        Value::new(9999),
+        Round::new(3),
+        v1.address,
+    );
+
+    let info = Info::new(Round::new(5), &my_addr, &v1.address);
+    let input = RoundInput::ProposalAndPolkaPrevious(proposal);
+
+    let transition = state_machine::apply(&ctx, state, &info, input);
+
+    assert!(
+        !transition.valid,
+        "a proposal whose own round disagrees with our round must be an invalid transition"
+    );
+    assert_eq!(transition.output, None);
+    assert_eq!(transition.next_state.step, Step::Propose);
+    assert_eq!(transition.next_state.round, Round::new(5));
+}
+
+// A `NewRound` for a round we have already left must not rewind us: re-entering an old round
+// while still holding locks from a later one would let us vote there a second time.
+#[test]
+fn driver_new_round_does_not_move_the_round_backwards() {
+    let [(v1, _sk1), (_v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), _v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    let steps = vec![
+        TestStep {
+            desc: "Start round 5, v1 is the proposer, we start timeout propose",
+            input: new_round_input(Round::new(5), v1.address),
+            expected_outputs: vec![start_propose_timer_output(Round::new(5))],
+            expected_round: Round::new(5),
+            new_state: propose_state(Round::new(5)),
+        },
+        TestStep {
+            desc: "A stale NewRound for round 2 is ignored: we stay at round 5",
+            input: new_round_input(Round::new(2), v1.address),
+            expected_outputs: vec![],
+            expected_round: Round::new(5),
+            new_state: propose_state(Round::new(5)),
+        },
+    ];
+
+    run_steps(&mut driver, steps)
+}
+
+// reproduces obs:proposal_emitted_by_non_proposer — fails on current code.
+//
+// Contract (spec `only_proposer_emits_proposal`): a node that is not the proposer for a round
+// must never emit a `Proposal` output for that round.
+//
+// The driver's `Input::ProposeValue` path (`apply_propose_value`, driver.rs) forwards the value
+// to the state machine without checking who the proposer is; `state_machine::apply`'s L18 arm
+// only guards it with `debug_assert!(info.is_proposer())`. So on a driver started for a round
+// whose proposer is another validator, a `ProposeValue` input either aborts the node (debug) or
+// silently emits a proposal signed by us (release) — neither is a rejection.
+#[test]
+#[ignore]
+fn driver_propose_value_by_non_proposer_is_rejected() {
+    let value = Value::new(9999);
+
+    let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    // Round 0 with v1 as the proposer: we are a plain validator waiting for v1's proposal.
+    driver
+        .process(new_round_input(Round::new(0), v1.address))
+        .expect("start round 0");
+
+    // The application hands us a locally built value for round 0 anyway.
+    let outputs = driver.process(Input::ProposeValue(Round::new(0), value.clone()));
+
+    match outputs {
+        // Rejecting the input outright honours the contract.
+        Err(_) => {}
+        Ok(outputs) => assert!(
+            !outputs
+                .iter()
+                .any(|o| matches!(o, Output::Propose(_))),
+            "we are not the proposer for round 0, yet the driver emitted a proposal: {outputs:?}"
+        ),
+    }
+}
+
+// Pins the `decision_is_never_overwritten` property: once the driver has recorded a decision for
+// a height, no later input may replace it with a different value.
+//
+// The model's counterexample overwrites `decision` through the raw `State::set_decision` builder,
+// which nothing but `commit` calls in production. The most realistic path a real client has is a
+// second commit certificate, for another value in a later round, arriving after we have decided —
+// exactly what a conflicting sync response or an equivocating quorum would deliver.
+#[test]
+fn driver_decision_is_not_overwritten_by_a_later_conflicting_commit() {
+    let value_v = Value::new(9999);
+    let value_w = Value::new(8888);
+
+    let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    driver
+        .process(new_round_input(Round::new(0), v1.address))
+        .expect("start round 0");
+
+    driver
+        .process(proposal_input(
+            Round::new(0),
+            value_v.clone(),
+            Round::Nil,
+            Validity::Valid,
+            v1.address,
+        ))
+        .expect("receive v1's proposal for v");
+
+    driver
+        .process(commit_certificate_input_at(
+            Round::new(0),
+            value_v.clone(),
+            &[v1.address, v2.address],
+        ))
+        .expect("decide v");
+
+    assert_eq!(
+        driver.decided_value(),
+        Some((Round::new(0), value_v.clone())),
+        "we should have decided v in round 0"
+    );
+
+    // A conflicting proposal and commit certificate for another value in a later round.
+    let _ = driver.process(proposal_input(
+        Round::new(1),
+        value_w.clone(),
+        Round::Nil,
+        Validity::Valid,
+        v2.address,
+    ));
+
+    let _ = driver.process(commit_certificate_input_at(
+        Round::new(1),
+        value_w.clone(),
+        &[v1.address, v2.address],
+    ));
+
+    assert_eq!(
+        driver.decided_value(),
+        Some((Round::new(0), value_v)),
+        "the decision must not be replaced by a conflicting later one"
+    );
+}
+
+// Pins `round_never_moves_backwards` (and with it `timeout_scheduled_at_most_once_per_round`):
+// a late `NewRound` for a round we have already left must neither rewind the round nor re-arm
+// that round's propose timeout.
+//
+// The model reaches the violation through the raw `State::update_round` mutator, which compares
+// nothing. The realistic public path is a duplicated/late round-start input arriving after a
+// skip-round has already carried us forward — which is what a re-delivered round certificate or
+// a slow round-start notification looks like on the wire.
+#[test]
+fn driver_stale_new_round_neither_rewinds_nor_rearms_the_propose_timeout() {
+    let value = Value::new(9999);
+
+    let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    // Round 0: we are not the proposer, so we arm the propose timeout for round 0.
+    let outputs = driver
+        .process(new_round_input(Round::new(0), v1.address))
+        .expect("start round 0");
+    assert_eq!(outputs, vec![start_propose_timer_output(Round::new(0))]);
+
+    // A commit certificate for round 2 justifies skipping ahead.
+    let outputs = driver
+        .process(commit_certificate_input_at(
+            Round::new(2),
+            value.clone(),
+            &[v1.address, v2.address],
+        ))
+        .expect("skip to round 2");
+    assert_eq!(outputs, vec![new_round_output(Round::new(2))]);
+
+    driver
+        .process(new_round_input(Round::new(2), v2.address))
+        .expect("start round 2");
+    assert_eq!(driver.round(), Round::new(2));
+
+    // A late round-start for round 0 is re-delivered.
+    let outputs = driver
+        .process(new_round_input(Round::new(0), v1.address))
+        .expect("stale new round is not an error");
+
+    assert_eq!(
+        driver.round(),
+        Round::new(2),
+        "a stale NewRound must not rewind the round"
+    );
+    assert!(
+        !outputs.contains(&start_propose_timer_output(Round::new(0))),
+        "the propose timeout for round 0 must not be armed a second time: {outputs:?}"
+    );
 }

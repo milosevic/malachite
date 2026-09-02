@@ -1,0 +1,335 @@
+{
+  "format": "quint-oracle-report",
+  "version": 2,
+  "families": [
+    {
+      "family": [],
+      "trackNames": [],
+      "sampleCount": 200,
+      "statePathsWritten": [
+        "bookkeeper.evidence",
+        "bookkeeper.height",
+        "bookkeeper.rounds.0",
+        "bookkeeper.rounds.0.emittedOutputs",
+        "bookkeeper.rounds.0.precommits.receivedVotes",
+        "bookkeeper.rounds.0.precommits.valuesWeights.{\"tag\":\"Val\",\"value\":\"v1\"}",
+        "bookkeeper.rounds.0.precommits.votesAddresses",
+        "bookkeeper.rounds.0.prevotes.receivedVotes",
+        "bookkeeper.rounds.0.prevotes.valuesWeights.{\"tag\":\"Val\",\"value\":\"v1\"}",
+        "bookkeeper.rounds.0.prevotes.votesAddresses",
+        "bookkeeper.rounds.0.votesAddressesWeights.bob",
+        "bookkeeper.rounds.0.votesAddressesWeights.john",
+        "bookkeeper.rounds.1",
+        "bookkeeper.rounds.1.emittedOutputs",
+        "bookkeeper.rounds.1.precommits.receivedVotes",
+        "bookkeeper.rounds.1.precommits.valuesWeights.{\"tag\":\"Nil\",\"value\":{\"#tup\":[]}}",
+        "bookkeeper.rounds.1.precommits.votesAddresses",
+        "bookkeeper.rounds.1.prevotes.receivedVotes",
+        "bookkeeper.rounds.1.prevotes.valuesWeights.{\"tag\":\"Nil\",\"value\":{\"#tup\":[]}}",
+        "bookkeeper.rounds.1.prevotes.valuesWeights.{\"tag\":\"Val\",\"value\":\"v1\"}",
+        "bookkeeper.rounds.1.prevotes.votesAddresses",
+        "bookkeeper.rounds.1.votesAddressesWeights.bob",
+        "bookkeeper.rounds.1.votesAddressesWeights.john",
+        "bookkeeper.rounds.2",
+        "bookkeeper.rounds.2.emittedOutputs",
+        "bookkeeper.rounds.2.precommits.receivedVotes",
+        "bookkeeper.rounds.2.precommits.valuesWeights.{\"tag\":\"Nil\",\"value\":{\"#tup\":[]}}",
+        "bookkeeper.rounds.2.precommits.valuesWeights.{\"tag\":\"Val\",\"value\":\"v2\"}",
+        "bookkeeper.rounds.2.precommits.votesAddresses",
+        "bookkeeper.rounds.2.prevotes.receivedVotes",
+        "bookkeeper.rounds.2.prevotes.valuesWeights.{\"tag\":\"Val\",\"value\":\"v2\"}",
+        "bookkeeper.rounds.2.prevotes.votesAddresses",
+        "bookkeeper.rounds.2.votesAddressesWeights.alice",
+        "bookkeeper.rounds.2.votesAddressesWeights.john",
+        "bookkeeper.validatorSet.alice",
+        "bookkeeper.validatorSet.bob",
+        "bookkeeper.validatorSet.john",
+        "lastEmitted.tag",
+        "lastEmitted.value",
+        "weightedVote.tag",
+        "weightedVote.value"
+      ],
+      "stepDiffs": [
+        [
+          "bookkeeper.height",
+          "bookkeeper.validatorSet.alice",
+          "bookkeeper.validatorSet.bob",
+          "bookkeeper.validatorSet.john"
+        ],
+        [
+          "bookkeeper.rounds.2",
+          "weightedVote.tag",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.0",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.0.prevotes.receivedVotes",
+          "bookkeeper.rounds.0.prevotes.valuesWeights.{\"tag\":\"Val\",\"value\":\"v1\"}",
+          "bookkeeper.rounds.0.prevotes.votesAddresses",
+          "bookkeeper.rounds.0.votesAddressesWeights.bob",
+          "weightedVote.value"
+        ],
+        [
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.1",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.0.precommits.receivedVotes",
+          "bookkeeper.rounds.0.precommits.valuesWeights.{\"tag\":\"Val\",\"value\":\"v1\"}",
+          "bookkeeper.rounds.0.precommits.votesAddresses",
+          "weightedVote.value"
+        ],
+        [
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.evidence",
+          "bookkeeper.rounds.1.precommits.receivedVotes",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.1.prevotes.receivedVotes",
+          "bookkeeper.rounds.1.prevotes.valuesWeights.{\"tag\":\"Nil\",\"value\":{\"#tup\":[]}}",
+          "bookkeeper.rounds.1.prevotes.votesAddresses",
+          "bookkeeper.rounds.1.votesAddressesWeights.bob",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.0.precommits.receivedVotes",
+          "bookkeeper.rounds.0.precommits.valuesWeights.{\"tag\":\"Val\",\"value\":\"v1\"}",
+          "bookkeeper.rounds.0.precommits.votesAddresses",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.2.emittedOutputs",
+          "bookkeeper.rounds.2.precommits.receivedVotes",
+          "bookkeeper.rounds.2.precommits.valuesWeights.{\"tag\":\"Val\",\"value\":\"v2\"}",
+          "bookkeeper.rounds.2.precommits.votesAddresses",
+          "bookkeeper.rounds.2.votesAddressesWeights.alice",
+          "lastEmitted.tag",
+          "lastEmitted.value",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.evidence",
+          "bookkeeper.rounds.2.precommits.receivedVotes",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.2.emittedOutputs",
+          "bookkeeper.rounds.2.precommits.receivedVotes",
+          "bookkeeper.rounds.2.precommits.valuesWeights.{\"tag\":\"Nil\",\"value\":{\"#tup\":[]}}",
+          "bookkeeper.rounds.2.precommits.votesAddresses",
+          "bookkeeper.rounds.2.votesAddressesWeights.john",
+          "lastEmitted.tag",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.1.emittedOutputs",
+          "bookkeeper.rounds.1.prevotes.receivedVotes",
+          "bookkeeper.rounds.1.prevotes.valuesWeights.{\"tag\":\"Val\",\"value\":\"v1\"}",
+          "bookkeeper.rounds.1.prevotes.votesAddresses",
+          "bookkeeper.rounds.1.votesAddressesWeights.john",
+          "lastEmitted.tag",
+          "lastEmitted.value",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.2.prevotes.receivedVotes",
+          "bookkeeper.rounds.2.prevotes.valuesWeights.{\"tag\":\"Val\",\"value\":\"v2\"}",
+          "bookkeeper.rounds.2.prevotes.votesAddresses",
+          "lastEmitted.tag",
+          "lastEmitted.value",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.evidence",
+          "bookkeeper.rounds.2.precommits.receivedVotes",
+          "lastEmitted.tag",
+          "lastEmitted.value",
+          "weightedVote.value"
+        ],
+        [],
+        [
+          "bookkeeper.rounds.1.emittedOutputs",
+          "bookkeeper.rounds.1.precommits.receivedVotes",
+          "bookkeeper.rounds.1.precommits.valuesWeights.{\"tag\":\"Nil\",\"value\":{\"#tup\":[]}}",
+          "bookkeeper.rounds.1.precommits.votesAddresses",
+          "lastEmitted.tag",
+          "lastEmitted.value",
+          "weightedVote.value"
+        ],
+        [
+          "bookkeeper.rounds.0.emittedOutputs",
+          "bookkeeper.rounds.0.prevotes.receivedVotes",
+          "bookkeeper.rounds.0.prevotes.valuesWeights.{\"tag\":\"Val\",\"value\":\"v1\"}",
+          "bookkeeper.rounds.0.prevotes.votesAddresses",
+          "bookkeeper.rounds.0.votesAddressesWeights.john",
+          "lastEmitted.tag",
+          "lastEmitted.value",
+          "weightedVote.value"
+        ]
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "name": "test_addVoteTest_2.itf.json",
+      "matchedFamilies": [
+        []
+      ],
+      "matched": true
+    },
+    {
+      "name": "test_applyCertificateTest_8.itf.json",
+      "matchedFamilies": [
+        []
+      ],
+      "matched": true
+    },
+    {
+      "name": "test_applyVoteTest_5.itf.json",
+      "matchedFamilies": [
+        []
+      ],
+      "matched": true
+    },
+    {
+      "name": "test_computeThresholdTest_3.itf.json",
+      "matchedFamilies": [
+        []
+      ],
+      "matched": true
+    },
+    {
+      "name": "test_countVotesvalidCertificateTest_6.itf.json",
+      "matchedFamilies": [
+        []
+      ],
+      "matched": true
+    },
+    {
+      "name": "test_isQuorumTest_0.itf.json",
+      "matchedFamilies": [
+        []
+      ],
+      "matched": true
+    },
+    {
+      "name": "test_isSkipTest_1.itf.json",
+      "matchedFamilies": [
+        []
+      ],
+      "matched": true
+    },
+    {
+      "name": "test_noSkipQuorumMixedVotesSameValTest_17.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 0 (action 'initialized')"
+    },
+    {
+      "name": "test_noSkipSmallQuorumMixedVotesSameValTest_13.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 0 (action 'initialized')"
+    },
+    {
+      "name": "test_polkaAnyTest_10.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 1 (action 'apply_vote')"
+    },
+    {
+      "name": "test_polkaNilTest_11.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 1 (action 'apply_vote')"
+    },
+    {
+      "name": "test_skipQuorumMixedVotesTwoValsTest_18.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 0 (action 'initialized')"
+    },
+    {
+      "name": "test_skipQuorumSinglePrecommitTest_16.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 1 (action 'apply_vote')"
+    },
+    {
+      "name": "test_skipQuorumSinglePrevoteTest_15.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 0 (action 'initialized')"
+    },
+    {
+      "name": "test_skipSmallQuorumAllPrevotesTest_12.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 0 (action 'initialized')"
+    },
+    {
+      "name": "test_skipSmallQuorumMixedVotesTwoValsTest_14.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 0 (action 'initialized')"
+    },
+    {
+      "name": "test_synchronousConsensusTest_9.itf.json",
+      "matchedFamilies": [],
+      "matched": false,
+      "failure": "no spec path matches step 0 (action 'initialized')"
+    },
+    {
+      "name": "test_toVoteKeeperOutputTest_4.itf.json",
+      "matchedFamilies": [
+        []
+      ],
+      "matched": true
+    },
+    {
+      "name": "test_voteCountFromCertificateTest_7.itf.json",
+      "matchedFamilies": [
+        []
+      ],
+      "matched": true
+    }
+  ],
+  "unmatchedTests": [
+    "test_noSkipQuorumMixedVotesSameValTest_17.itf.json",
+    "test_noSkipSmallQuorumMixedVotesSameValTest_13.itf.json",
+    "test_polkaAnyTest_10.itf.json",
+    "test_polkaNilTest_11.itf.json",
+    "test_skipQuorumMixedVotesTwoValsTest_18.itf.json",
+    "test_skipQuorumSinglePrecommitTest_16.itf.json",
+    "test_skipQuorumSinglePrevoteTest_15.itf.json",
+    "test_skipSmallQuorumAllPrevotesTest_12.itf.json",
+    "test_skipSmallQuorumMixedVotesTwoValsTest_14.itf.json",
+    "test_synchronousConsensusTest_9.itf.json"
+  ],
+  "partitions": [
+    {
+      "strategy": 1,
+      "components": [],
+      "bridgePaths": []
+    }
+  ],
+  "run": {
+    "spec": "specs/consensus/quint/votekeeper.qnt",
+    "main": "votekeeper",
+    "system": "votekeeper",
+    "model": "specs/consensus/quint/votekeeper.qnt",
+    "maxSamples": 200,
+    "maxSteps": 20,
+    "randomSteps": false
+  },
+  "observations": {}
+}

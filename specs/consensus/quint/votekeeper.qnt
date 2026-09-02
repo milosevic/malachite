@@ -579,6 +579,148 @@ pure def getCertificate(keeper: Bookkeeper, vkout: VoteKeeperOutput) : Certifica
         }
 
     // ************************************************************************
+    // Oracle-compatible action names
+    // These names must match exactly the strings passed to logAction().
+    // ************************************************************************
+
+    action initialized(initialHeight: Height, validatorSet: ValidatorSet): bool = all {
+        weightedVote' = NoWeightedVote,
+        bookkeeper' = initBookKeeper(initialHeight, validatorSet),
+        lastEmitted' = NoVKOutput,
+    }
+
+    action apply_vote(vote: Vote, currentRound: Round): bool =
+        val weight = bookkeeper.validatorSet.getOrElse(vote.srcAddress, 0)
+        val output = applyVote(bookkeeper, vote, currentRound)
+        all {
+            weightedVote' = WV((vote, weight, currentRound)),
+            bookkeeper' = output.bookkeeper,
+            lastEmitted' = output.output,
+        }
+
+    // Oracle simulation actions — prefixed to avoid colliding with quint test's
+    // default "init" / "step" initialiser names, which would change ITF trace
+    // generation for existing pure-function run tests.
+    //
+    // oracle_init sets a BLANK pre-initialization state (no validators).
+    // The first oracle_step is expected to call `initialized`, matching the
+    // first logAction("initialized", ...) emitted by the Rust runner.
+    action oracle_init: bool = all {
+        weightedVote' = NoWeightedVote,
+        bookkeeper' = initBookKeeper(0, Map()),
+        lastEmitted' = NoVKOutput,
+    }
+
+    action oracle_step: bool = any {
+        // Initialization branch: guarded so it fires ONLY from the blank oracle_init
+        // state (empty validator set). This prevents the oracle from re-initializing
+        // at every step and ensures apply_vote is the only live branch afterward.
+        // nondet names `initialHeight` and `vs` match the logged arg names exactly.
+        {
+            nondet initialHeight = oneOf(Set(1))
+            nondet vs = oneOf(Set(
+                Map("alice" -> 60, "bob" -> 30, "john" -> 10),
+                Map("alice" -> 10, "bob" -> 30, "john" -> 60),
+                Map("alice" -> 10, "bob" -> 60, "john" -> 20),
+                Map("alice" -> 20, "bob" -> 50, "john" -> 10),
+                Map("alice" -> 50, "bob" -> 20, "john" -> 10)
+            ))
+            all {
+                bookkeeper.validatorSet == Map(),
+                initialized(initialHeight, vs),
+            }
+        },
+        // Vote application branch: guarded so it fires ONLY after initialization.
+        // nondet names `addr`, `vtype`, `r`, `value`, `cr` match the logged arg names
+        // so the oracle's guided replay can pin them to the concrete test values.
+        {
+            nondet addr = oneOf(Set("alice", "bob", "john"))
+            nondet vtype = oneOf(Set(Prevote, Precommit))
+            nondet r = oneOf(Set(0, 1, 2))
+            nondet value = oneOf(Set(Nil, Val("v1"), Val("v2")))
+            nondet cr = oneOf(Set(0, 1, 2))
+            val v = mkVote(vtype, addr, 1, r, value)
+            all {
+                bookkeeper.validatorSet != Map(),
+                apply_vote(v, cr),
+            }
+        }
+    }
+
+    // ************************************************************************
+    // Witnesses (oracle behavior-coverage tracking)
+    // ************************************************************************
+
+    val polka_any_reached: bool =
+        match lastEmitted {
+            | PolkaAnyVKOutput(r) => true
+            | PolkaNilVKOutput(r) => false
+            | PolkaValueVKOutput(rv) => false
+            | PrecommitAnyVKOutput(r) => false
+            | PrecommitValueVKOutput(rv) => false
+            | SkipVKOutput(r) => false
+            | NoVKOutput => false
+        }
+
+    val polka_nil_reached: bool =
+        match lastEmitted {
+            | PolkaNilVKOutput(r) => true
+            | PolkaAnyVKOutput(r) => false
+            | PolkaValueVKOutput(rv) => false
+            | PrecommitAnyVKOutput(r) => false
+            | PrecommitValueVKOutput(rv) => false
+            | SkipVKOutput(r) => false
+            | NoVKOutput => false
+        }
+
+    val polka_value_reached: bool =
+        match lastEmitted {
+            | PolkaValueVKOutput(rv) => true
+            | PolkaAnyVKOutput(r) => false
+            | PolkaNilVKOutput(r) => false
+            | PrecommitAnyVKOutput(r) => false
+            | PrecommitValueVKOutput(rv2) => false
+            | SkipVKOutput(r) => false
+            | NoVKOutput => false
+        }
+
+    val precommit_any_reached: bool =
+        match lastEmitted {
+            | PrecommitAnyVKOutput(r) => true
+            | PolkaAnyVKOutput(r) => false
+            | PolkaNilVKOutput(r) => false
+            | PolkaValueVKOutput(rv) => false
+            | PrecommitValueVKOutput(rv) => false
+            | SkipVKOutput(r) => false
+            | NoVKOutput => false
+        }
+
+    val precommit_value_reached: bool =
+        match lastEmitted {
+            | PrecommitValueVKOutput(rv) => true
+            | PolkaAnyVKOutput(r) => false
+            | PolkaNilVKOutput(r) => false
+            | PolkaValueVKOutput(rv2) => false
+            | PrecommitAnyVKOutput(r) => false
+            | SkipVKOutput(r) => false
+            | NoVKOutput => false
+        }
+
+    val skip_round_reached: bool =
+        match lastEmitted {
+            | SkipVKOutput(r) => true
+            | PolkaAnyVKOutput(r) => false
+            | PolkaNilVKOutput(r) => false
+            | PolkaValueVKOutput(rv) => false
+            | PrecommitAnyVKOutput(r) => false
+            | PrecommitValueVKOutput(rv) => false
+            | NoVKOutput => false
+        }
+
+    val equivocation_detected: bool =
+        bookkeeper.evidence != Set()
+
+    // ************************************************************************
     // Properties/Invariants
     // ************************************************************************
 

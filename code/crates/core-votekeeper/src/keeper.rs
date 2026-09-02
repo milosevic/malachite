@@ -191,12 +191,34 @@ where
     /// Create a new `VoteKeeper` instance, for the given
     /// total network weight (ie. voting power) and threshold parameters.
     pub fn new(validator_set: Ctx::ValidatorSet, threshold_params: ThresholdParams) -> Self {
-        Self {
+        let keeper = Self {
             validator_set,
             threshold_params,
             per_round: BTreeMap::new(),
             evidence: EvidenceMap::new(),
+        };
+
+        if quint_oracle::enabled() {
+            let voting_powers: Vec<u64> = keeper
+                .validator_set
+                .iter()
+                .map(|v| v.voting_power())
+                .collect();
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "VoteKeeperNew")
+                .argument("voting_powers", voting_powers, Some("VOTING_POWER_SETS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("roundsCount"),
+                    ]),
+                    0i64,
+                )
+                .scope("vote-keeper")
+                .send();
         }
+
+        keeper
     }
 
     /// Return the current validator set
@@ -236,7 +258,29 @@ where
 
     /// Remove and return all recorded evidence.
     pub fn take_evidence(&mut self) -> EvidenceMap<Ctx> {
-        core::mem::take(&mut self.evidence)
+        let evidence = core::mem::take(&mut self.evidence);
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "take_evidence")
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("evidenceCount"),
+                    ]),
+                    0i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("roundsCount"),
+                    ]),
+                    self.per_round.len() as i64,
+                )
+                .scope("vote-keeper")
+                .send();
+        }
+
+        evidence
     }
 
     /// Check if we have already seen a vote.
@@ -252,6 +296,36 @@ where
         vote: SignedVote<Ctx>,
         round: Round,
     ) -> Option<Output<ValueId<Ctx>>> {
+        // Quint oracle: the vote as the spec models it — the sender by its index
+        // in the validator set (-1 when it is not in the set at all), the value
+        // rendered through its Display id, and both rounds as i64.
+        let oracle_on = quint_oracle::enabled();
+        let oracle_src: i64 = if oracle_on {
+            (0..self.validator_set.count())
+                .find(|i| {
+                    self.validator_set
+                        .get_by_index(*i)
+                        .is_some_and(|v| v.address() == vote.validator_address())
+                })
+                .map_or(-1, |i| i as i64)
+        } else {
+            -1
+        };
+        let oracle_vote_type = match vote.vote_type() {
+            VoteType::Prevote => "Prevote",
+            VoteType::Precommit => "Precommit",
+        };
+        let oracle_value = if oracle_on {
+            match vote.value() {
+                NilOrVal::Nil => alloc::string::String::from("Nil"),
+                NilOrVal::Val(id) => alloc::format!("{id}"),
+            }
+        } else {
+            alloc::string::String::new()
+        };
+        let oracle_round = vote.round().as_i64();
+        let oracle_current_round = round.as_i64();
+
         let total_weight = self.total_weight();
         let per_round =
             self.per_round
@@ -262,6 +336,38 @@ where
 
         let Some(validator) = self.validator_set.get_by_address(vote.validator_address()) else {
             // Vote from unknown validator, let's discard it.
+            if oracle_on {
+                quint_oracle::Event::builder(quint_oracle::current_test(), "apply_vote")
+                    .argument("vote_type", oracle_vote_type, Some("VOTE_TYPES"))
+                    .argument("src", oracle_src, Some("SENDERS"))
+                    .argument("vote_round", oracle_round, Some("VOTE_ROUNDS"))
+                    .argument("value", oracle_value.as_str(), Some("VOTE_VALUES"))
+                    .argument("current_round", oracle_current_round, Some("CURRENT_ROUNDS"))
+                    .assert(
+                        Vec::from([
+                            quint_oracle::PathSeg::ident("ghost"),
+                            quint_oracle::PathSeg::ident("lastOutputName"),
+                        ]),
+                        "None",
+                    )
+                    .assert(
+                        Vec::from([
+                            quint_oracle::PathSeg::ident("ghost"),
+                            quint_oracle::PathSeg::ident("roundsCount"),
+                        ]),
+                        self.per_round.len() as i64,
+                    )
+                    .assert(
+                        Vec::from([
+                            quint_oracle::PathSeg::ident("ghost"),
+                            quint_oracle::PathSeg::ident("evidenceCount"),
+                        ]),
+                        self.evidence.iter().count() as i64,
+                    )
+                    .scope("vote-keeper")
+                    .send();
+            }
+
             return None;
         };
 
@@ -277,6 +383,39 @@ where
                     conflicting, existing
                 );
                 self.evidence.add(existing, conflicting);
+
+                if oracle_on {
+                    quint_oracle::Event::builder(quint_oracle::current_test(), "apply_vote")
+                        .argument("vote_type", oracle_vote_type, Some("VOTE_TYPES"))
+                        .argument("src", oracle_src, Some("SENDERS"))
+                        .argument("vote_round", oracle_round, Some("VOTE_ROUNDS"))
+                        .argument("value", oracle_value.as_str(), Some("VOTE_VALUES"))
+                        .argument("current_round", oracle_current_round, Some("CURRENT_ROUNDS"))
+                        .assert(
+                            Vec::from([
+                                quint_oracle::PathSeg::ident("ghost"),
+                                quint_oracle::PathSeg::ident("lastOutputName"),
+                            ]),
+                            "None",
+                        )
+                        .assert(
+                            Vec::from([
+                                quint_oracle::PathSeg::ident("ghost"),
+                                quint_oracle::PathSeg::ident("roundsCount"),
+                            ]),
+                            self.per_round.len() as i64,
+                        )
+                        .assert(
+                            Vec::from([
+                                quint_oracle::PathSeg::ident("ghost"),
+                                quint_oracle::PathSeg::ident("evidenceCount"),
+                            ]),
+                            self.evidence.iter().count() as i64,
+                        )
+                        .scope("vote-keeper")
+                        .send();
+                }
+
                 return None;
             }
         }
@@ -302,14 +441,74 @@ where
 
         let output = threshold_to_output(vote.vote_type(), threshold, skip_round);
 
-        match output {
+        let result = match output {
             // Ensure we do not output the same message twice
             Some(output) if !per_round.emitted_outputs.contains(&output) => {
                 per_round.emitted_outputs.insert(output.clone());
                 Some(output)
             }
             _ => None,
+        };
+
+        if oracle_on {
+            let (name, value, skipped) = match &result {
+                None => ("None", alloc::string::String::new(), -1i64),
+                Some(Output::PolkaAny) => ("PolkaAny", alloc::string::String::new(), -1),
+                Some(Output::PolkaNil) => ("PolkaNil", alloc::string::String::new(), -1),
+                Some(Output::PolkaValue(v)) => ("PolkaValue", alloc::format!("{v}"), -1),
+                Some(Output::PrecommitAny) => ("PrecommitAny", alloc::string::String::new(), -1),
+                Some(Output::PrecommitValue(v)) => ("PrecommitValue", alloc::format!("{v}"), -1),
+                Some(Output::SkipRound(r)) => {
+                    ("SkipRound", alloc::string::String::new(), r.as_i64())
+                }
+            };
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "apply_vote")
+                .argument("vote_type", oracle_vote_type, Some("VOTE_TYPES"))
+                .argument("src", oracle_src, Some("SENDERS"))
+                .argument("vote_round", oracle_round, Some("VOTE_ROUNDS"))
+                .argument("value", oracle_value.as_str(), Some("VOTE_VALUES"))
+                .argument("current_round", oracle_current_round, Some("CURRENT_ROUNDS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("lastOutputName"),
+                    ]),
+                    name,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("lastOutputValue"),
+                    ]),
+                    value,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("lastOutputRound"),
+                    ]),
+                    skipped,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("roundsCount"),
+                    ]),
+                    self.per_round.len() as i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("evidenceCount"),
+                    ]),
+                    self.evidence.iter().count() as i64,
+                )
+                .scope("vote-keeper")
+                .send();
         }
+
+        result
     }
 
     /// Check if a threshold is met, ie. if we have a quorum for that threshold.
@@ -332,6 +531,27 @@ where
     /// Prunes all stored votes from rounds less than `min_round`.
     pub fn prune_votes(&mut self, min_round: Round) {
         self.per_round.retain(|round, _| *round >= min_round);
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "prune_votes")
+                .argument("min_round", min_round.as_i64(), Some("PRUNE_ROUNDS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("roundsCount"),
+                    ]),
+                    self.per_round.len() as i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("evidenceCount"),
+                    ]),
+                    self.evidence.iter().count() as i64,
+                )
+                .scope("vote-keeper")
+                .send();
+        }
     }
 }
 

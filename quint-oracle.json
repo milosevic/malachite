@@ -1,0 +1,25 @@
+{
+  "format": "quint-oracle-config",
+  "version": 1,
+  "spec": "specs/consensus/quint/votekeeper.qnt",
+  "init": "oracle_init",
+  "step": "oracle_step",
+  "witnesses": [
+    "polka_any_reached",
+    "polka_nil_reached",
+    "polka_value_reached",
+    "precommit_any_reached",
+    "precommit_value_reached",
+    "skip_round_reached",
+    "equivocation_detected"
+  ],
+  "testCommand": [
+    "/bin/sh",
+    "-c",
+    "export PATH=\"/nix/store/2vdxz4xwplgb5rgfhqr0jr85fd7qqgmb-cargo-1.95.0/bin:/nix/store/ah2c1xy8qqg2209chn65yi8fd62zk3hi-rustc-1.95.0/bin:$PATH\"; exec cargo test --manifest-path code/Cargo.toml --package arc-malachitebft-test-mbt --lib -- tests::votekeeper::test_itf --nocapture"
+  ],
+  "maxSamples": 200,
+  "maxSteps": 20,
+  "reportDir": "./oracle-coverage",
+  "studio": {}
+}

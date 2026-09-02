@@ -500,6 +500,12 @@ where
         proposer: Ctx::Address,
     ) -> Result<Option<RoundOutput<Ctx>>, Error<Ctx>> {
         if self.height() == height {
+            // A `NewRound` for a round we already left is stale: rewinding would let us
+            // re-vote in a round we have played while still holding locks from a later one.
+            if round < self.round_state.round {
+                return Ok(None);
+            }
+
             // If it's a new round for same height, just reset the round, keep the valid and locked values
             self.round_state.round = round;
         } else {

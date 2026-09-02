@@ -23,6 +23,7 @@ workspace = true
 malachitebft-core-types = { workspace = true }
 malachitebft-core-state-machine = { workspace = true }
 malachitebft-core-votekeeper = { workspace = true }
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 
 derive-where = { workspace = true }
 thiserror = { workspace = true, default-features = false }

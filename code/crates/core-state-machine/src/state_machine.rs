@@ -52,12 +52,17 @@ where
     }
 }
 
-/// Check that a proposal has a valid Proof-Of-Lock round
-fn is_valid_pol_round<Ctx>(state: &State<Ctx>, pol_round: Round) -> bool
+/// Check that a proposal has a valid Proof-Of-Lock round.
+///
+/// The POL round must be defined, strictly below the round we are at, and strictly below the
+/// proposal's own round. The last check keeps a mis-routed or adversarial proposal — one whose
+/// own round disagrees with the round we are at — out of `prevote_previous`, which asserts it.
+fn is_valid_pol_round<Ctx>(state: &State<Ctx>, proposal: &Ctx::Proposal) -> bool
 where
     Ctx: Context,
 {
-    pol_round.is_defined() && pol_round < state.round
+    let pol_round = proposal.pol_round();
+    pol_round.is_defined() && pol_round < state.round && pol_round < proposal.round()
 }
 
 /// Apply an input to the current state at the current round.
@@ -79,13 +84,80 @@ where
 {
     let this_round = state.round == info.input_round;
 
-    match (state.step, input) {
+    // Quint oracle: describe the input the way the spec models it — the
+    // constructor by name, plus the proposal / round fields it carries — before
+    // `input` is moved into the match below.
+    let oracle_on = quint_oracle::enabled();
+    let oracle_ir = info.input_round.as_i64();
+    let oracle_state_round = state.round.as_i64();
+    let oracle_proposer = if info.is_proposer() { "a" } else { "b" };
+    let (oracle_tag, oracle_value, oracle_pround, oracle_ppol, oracle_nround) = if oracle_on {
+        match &input {
+            Input::NoInput => ("NoInput", None, None, None, None),
+            Input::NewRound(round) => ("NewRound", None, None, None, Some(round.as_i64())),
+            Input::ProposeValue(value) => (
+                "ProposeValue",
+                Some(alloc::format!("{}", value.id())),
+                None,
+                None,
+                None,
+            ),
+            Input::Proposal(proposal) => (
+                "Proposal",
+                Some(alloc::format!("{}", proposal.value().id())),
+                Some(proposal.round().as_i64()),
+                Some(proposal.pol_round().as_i64()),
+                None,
+            ),
+            Input::InvalidProposal => ("InvalidProposal", None, None, None, None),
+            Input::ProposalAndPolkaPrevious(proposal) => (
+                "ProposalAndPolkaPrevious",
+                Some(alloc::format!("{}", proposal.value().id())),
+                Some(proposal.round().as_i64()),
+                Some(proposal.pol_round().as_i64()),
+                None,
+            ),
+            Input::InvalidProposalAndPolkaPrevious(proposal) => (
+                "InvalidProposalAndPolkaPrevious",
+                Some(alloc::format!("{}", proposal.value().id())),
+                Some(proposal.round().as_i64()),
+                Some(proposal.pol_round().as_i64()),
+                None,
+            ),
+            Input::PolkaAny => ("PolkaAny", None, None, None, None),
+            Input::PolkaNil => ("PolkaNil", None, None, None, None),
+            Input::ProposalAndPolkaCurrent(proposal) => (
+                "ProposalAndPolkaCurrent",
+                Some(alloc::format!("{}", proposal.value().id())),
+                Some(proposal.round().as_i64()),
+                Some(proposal.pol_round().as_i64()),
+                None,
+            ),
+            Input::PrecommitAny => ("PrecommitAny", None, None, None, None),
+            Input::ProposalAndPrecommitValue(proposal) => (
+                "ProposalAndPrecommitValue",
+                Some(alloc::format!("{}", proposal.value().id())),
+                Some(proposal.round().as_i64()),
+                Some(proposal.pol_round().as_i64()),
+                None,
+            ),
+            Input::SkipRound(round) => ("SkipRound", None, None, None, Some(round.as_i64())),
+            Input::TimeoutPropose => ("TimeoutPropose", None, None, None, None),
+            Input::TimeoutPrevote => ("TimeoutPrevote", None, None, None, None),
+            Input::TimeoutPrecommit => ("TimeoutPrecommit", None, None, None, None),
+        }
+    } else {
+        ("", None, None, None, None)
+    };
+
+    let transition = match (state.step, input) {
         //
         // From NewRound.
         //
 
         // L11/L14
-        (Step::Unstarted, Input::NewRound(round)) if info.is_proposer() => {
+        // A `NewRound` for a round we already left is stale: it must not rewind us.
+        (Step::Unstarted, Input::NewRound(round)) if round >= state.round && info.is_proposer() => {
             state.update_round(round);
 
             debug_trace!(state, Line::L11Proposer);
@@ -95,7 +167,7 @@ where
         }
 
         // L11/L20
-        (Step::Unstarted, Input::NewRound(round)) => {
+        (Step::Unstarted, Input::NewRound(round)) if round >= state.round => {
             state.update_round(round);
 
             debug_trace!(state, Line::L11NonProposer);
@@ -131,7 +203,7 @@ where
 
         // L28 with valid proposal
         (Step::Propose, Input::ProposalAndPolkaPrevious(proposal))
-            if this_round && is_valid_pol_round(&state, proposal.pol_round()) =>
+            if this_round && is_valid_pol_round(&state, &proposal) =>
         {
             debug_trace!(state, Line::L28ValidProposal);
             prevote_previous(ctx, state, info.address, &proposal)
@@ -139,7 +211,7 @@ where
 
         // L28 with invalid proposal
         (Step::Propose, Input::InvalidProposalAndPolkaPrevious(proposal))
-            if this_round && is_valid_pol_round(&state, proposal.pol_round()) =>
+            if this_round && is_valid_pol_round(&state, &proposal) =>
         {
             debug_trace!(state, Line::L28InvalidProposal);
             debug_trace!(state, Line::L32InvalidValue);
@@ -237,14 +309,50 @@ where
 
         // L49
         (_, Input::ProposalAndPrecommitValue(proposal)) => {
-            let round = state.round;
             debug_trace!(state, Line::L49);
+            // The decision output must name the round the value was proposed in — the same
+            // round we record in `state.decision` — not the round we happen to be at.
+            let round = proposal.round();
             commit(state, round, proposal)
         }
 
         // Invalid transition.
         _ => Transition::invalid(state),
+    };
+
+    if oracle_on {
+        let mut event = quint_oracle::Event::builder(quint_oracle::current_test(), "Stateapply")
+            .argument("inputTag", oracle_tag, Some("ALL_TAGS"))
+            .argument("ir", oracle_ir, None)
+            .argument("proposer", oracle_proposer, Some("ADDRS"));
+
+        // Inputs that carry no proposal / no round leave those picks as
+        // don't-cares in the spec; pin them to values the spec always holds so
+        // replay never has to search them blind.
+        event = event
+            .argument(
+                "pvalue",
+                oracle_value.as_deref().unwrap_or("v"),
+                Some("VALUES"),
+            )
+            .argument("pround", oracle_pround.unwrap_or(oracle_state_round), None)
+            .argument("ppol", oracle_ppol.unwrap_or(-1), None)
+            .argument("nround", oracle_nround.unwrap_or(oracle_state_round), None);
+
+        // Conformance fact: whether the transition table accepted the input.
+        // (The absolute round is deliberately NOT asserted — `state_machine::apply`
+        // is also called directly on caller-built states, whose round the model
+        // has no logged event to follow.)
+        event
+            .assert(
+                alloc::vec::Vec::from([quint_oracle::PathSeg::ident("lastValid")]),
+                transition.valid,
+            )
+            .scope("round-state-machine")
+            .send();
     }
+
+    transition
 }
 
 //---------------------------------------------------------------------

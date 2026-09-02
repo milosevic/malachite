@@ -278,6 +278,7 @@ dependencies = [
  "futures",
  "genawaiter",
  "multiaddr",
+ "quint-oracle",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
@@ -294,6 +295,7 @@ dependencies = [
  "arc-malachitebft-test",
  "derive-where",
  "futures",
+ "quint-oracle",
  "thiserror 2.0.16",
  "tracing",
 ]
@@ -305,6 +307,7 @@ dependencies = [
  "arc-malachitebft-core-types",
  "derive-where",
  "displaydoc",
+ "quint-oracle",
  "time",
 ]
 
@@ -329,6 +332,7 @@ dependencies = [
  "arc-malachitebft-core-types",
  "arc-malachitebft-test",
  "derive-where",
+ "quint-oracle",
  "thiserror 2.0.16",
  "tracing",
 ]
@@ -392,6 +396,7 @@ dependencies = [
  "hex",
  "itertools 0.14.0",
  "libp2p",
+ "quint-oracle",
  "ractor",
  "rand 0.8.5",
  "tokio",
@@ -738,6 +743,7 @@ dependencies = [
  "criterion",
  "lz4_flex",
  "nix 0.31.2",
+ "quint-oracle",
  "rand 0.8.5",
  "tempfile",
  "testdir",
@@ -4314,6 +4320,17 @@ dependencies = [
  "tracing",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "quint-oracle"
+version = "0.1.0"
+dependencies = [
+ "quint-oracle-macros",
+]
+
+[[package]]
+name = "quint-oracle-macros"
+version = "0.1.0"
 
 [[package]]
 name = "quote"

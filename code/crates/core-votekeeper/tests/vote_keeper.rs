@@ -1,4 +1,4 @@
-use malachitebft_core_types::{NilOrVal, Round, SignedVote};
+use malachitebft_core_types::{NilOrVal, Round, SignedVote, Threshold, VoteType};
 
 use arc_malachitebft_core_votekeeper::keeper::{Output, VoteKeeper};
 
@@ -344,4 +344,299 @@ fn equivocation() {
     assert_eq!(msg, None);
 
     assert_eq!(keeper.evidence().get(&addr2), Some(&vec![(vote21, vote22)]));
+}
+
+/// Characterization test for the `PolkaAny` hazard: in a unanimous round the
+/// keeper reaches a prevote quorum but never emits `PolkaAny`.
+///
+/// `compute_threshold` returns `Threshold::Value` as soon as the quorum is on
+/// the voted value and never falls through to the `Any` branch, and `apply_vote`
+/// emits at most one output per call. So a consumer keyed on `PolkaAny` (e.g. to
+/// arm the prevote timeout) never sees it here, even though
+/// `is_threshold_met(.., Threshold::Any)` answers `true`.
+#[test]
+fn prevote_unanimous_value_quorum_never_emits_polka_any() {
+    let ([addr1, addr2, addr3, addr4], mut keeper) = setup([1, 1, 1, 1]);
+
+    let height = Height::new(1);
+    let round = Round::new(0);
+
+    let id = ValueId::new(1);
+    let value = NilOrVal::Val(id);
+
+    let msg = keeper.apply_vote(new_signed_prevote(height, round, value, addr1), round);
+    assert_eq!(msg, None);
+
+    let msg = keeper.apply_vote(new_signed_prevote(height, round, value, addr2), round);
+    assert_eq!(msg, None);
+
+    // The quorum is crossed on the value: only the stronger `PolkaValue` is reported.
+    let msg = keeper.apply_vote(new_signed_prevote(height, round, value, addr3), round);
+    assert_eq!(msg, Some(Output::PolkaValue(id)));
+
+    // A further prevote for the same value emits nothing at all.
+    let msg = keeper.apply_vote(new_signed_prevote(height, round, value, addr4), round);
+    assert_eq!(msg, None);
+
+    // The `Any` threshold is met ...
+    assert!(keeper.is_threshold_met(&round, VoteType::Prevote, Threshold::Any));
+
+    // ... yet `PolkaAny` was never emitted for this round.
+    let emitted = keeper.per_round(round).unwrap().emitted_outputs();
+    assert!(
+        !emitted.contains(&Output::PolkaAny),
+        "expected no PolkaAny in a unanimous round, got {emitted:?}"
+    );
+    assert!(emitted.contains(&Output::PolkaValue(id)));
+}
+
+/// A future-round `SkipRound` is emitted first, and the later `2f+1`
+/// `PrecommitValue` for that same future round is still reported: the
+/// `emitted_outputs` dedup only suppresses the repeated `SkipRound`, not the
+/// stronger `PrecommitValue`, which `threshold_to_output` special-cases inside
+/// the future-round branch.
+#[test]
+fn precommit_value_after_skip_round_in_future_round() {
+    let ([addr1, addr2, addr3, _addr4], mut keeper) = setup([1, 1, 1, 1]);
+
+    let height = Height::new(1);
+    let cur_round = Round::new(0);
+    let fut_round = Round::new(1);
+
+    let id = ValueId::new(1);
+    let val = NilOrVal::Val(id);
+
+    // First precommit for the future round: below both thresholds.
+    let msg = keeper.apply_vote(new_signed_precommit(height, fut_round, val, addr1), cur_round);
+    assert_eq!(msg, None);
+
+    // Second one crosses f+1 but not 2f+1: only the skip is reported.
+    let msg = keeper.apply_vote(new_signed_precommit(height, fut_round, val, addr2), cur_round);
+    assert_eq!(msg, Some(Output::SkipRound(fut_round)));
+
+    // Third one reaches the 2f+1 quorum on the value. The skip threshold is
+    // still met, but `PrecommitValue` outranks it and `SkipRound` is not
+    // re-emitted.
+    let msg = keeper.apply_vote(new_signed_precommit(height, fut_round, val, addr3), cur_round);
+    assert_eq!(msg, Some(Output::PrecommitValue(id)));
+
+    let emitted = keeper.per_round(fut_round).unwrap().emitted_outputs();
+    assert!(emitted.contains(&Output::SkipRound(fut_round)));
+    assert!(emitted.contains(&Output::PrecommitValue(id)));
+    assert_eq!(emitted.len(), 2);
+}
+
+/// Characterization test for the unbounded-evidence hazard: a single
+/// equivocating validator can append one evidence entry per fresh conflicting
+/// value, `add` dedupes only exact repeats of the same ordered pair, and
+/// `prune_votes` never touches the evidence map.
+#[test]
+fn repeated_equivocation_grows_evidence_and_survives_prune() {
+    let ([addr1, ..], mut keeper) = setup([1, 1, 1, 1]);
+
+    let height = Height::new(1);
+    let round = Round::new(0);
+
+    // First vote, then a stream of conflicting ones from the same validator.
+    let first = new_signed_prevote(height, round, NilOrVal::Val(ValueId::new(0)), addr1);
+    assert_eq!(keeper.apply_vote(first, round), None);
+
+    const CONFLICTS: u64 = 50;
+    for i in 1..=CONFLICTS {
+        let vote = new_signed_prevote(height, round, NilOrVal::Val(ValueId::new(i)), addr1);
+        assert_eq!(keeper.apply_vote(vote, round), None);
+    }
+
+    // Every fresh conflicting value appended a new entry: growth is unbounded
+    // in the number of equivocations, not capped at one proven pair.
+    assert_eq!(
+        keeper.evidence().get(&addr1).map(|e| e.len()),
+        Some(CONFLICTS as usize)
+    );
+
+    // An exact repeat of an already recorded pair is the only thing deduped.
+    let repeat = new_signed_prevote(height, round, NilOrVal::Val(ValueId::new(1)), addr1);
+    assert_eq!(keeper.apply_vote(repeat, round), None);
+    assert_eq!(
+        keeper.evidence().get(&addr1).map(|e| e.len()),
+        Some(CONFLICTS as usize)
+    );
+
+    // Pruning the round drops the per-round votes but leaves the evidence.
+    keeper.prune_votes(Round::new(1));
+    assert_eq!(keeper.rounds(), 0);
+    assert_eq!(
+        keeper.evidence().get(&addr1).map(|e| e.len()),
+        Some(CONFLICTS as usize)
+    );
+
+    // Only the caller taking the evidence releases it.
+    let taken = keeper.take_evidence();
+    assert_eq!(taken.get(&addr1).map(|e| e.len()), Some(CONFLICTS as usize));
+    assert!(keeper.evidence().is_empty());
+}
+
+/// Characterization test for the weight-overflow hazard: a validator set whose
+/// total voting power leaves no headroom for `total * 2` turns any well-formed
+/// vote into a panic inside `ThresholdParam::is_met`, taking the node down.
+/// `VoteKeeper::new` accepts such a validator set without complaint.
+#[test]
+#[should_panic(expected = "attempt to multiply with overflow")]
+fn apply_vote_panics_on_total_weight_overflow() {
+    let huge = 3_100_000_000_000_000_000; // 3 x this overflows u64 when doubled
+    let ([addr1, ..], mut keeper) = setup([huge, huge, huge]);
+    assert_eq!(keeper.total_weight(), huge * 3);
+
+    let vote = new_signed_prevote(
+        Height::new(1),
+        Round::new(0),
+        NilOrVal::Val(ValueId::new(1)),
+        addr1,
+    );
+
+    keeper.apply_vote(vote, Round::new(0));
+}
+
+/// Pins the `evidence_bounded_per_validator` violation: the model asserts a
+/// single validator's evidence never accumulates more than one proven pair, so
+/// a flooding equivocator cannot grow the keeper's memory. Driving the
+/// counterexample through the public `apply_vote` API — one validator
+/// equivocating on its precommit and then on its prevote in the same round —
+/// records two entries for that validator, so this test FAILS on current code
+/// and pins the unbounded-evidence bug.
+// reproduces evidence_bounded_per_validator — fails on current code
+#[test]
+#[ignore]
+fn evidence_stays_bounded_per_validator() {
+    let ([addr1, ..], mut keeper) = setup([1, 1, 1, 1]);
+
+    let height = Height::new(1);
+    let round = Round::new(1);
+
+    // First equivocation: two precommits for different values.
+    let pc1 = new_signed_precommit(height, round, NilOrVal::Val(ValueId::new(0)), addr1);
+    assert_eq!(keeper.apply_vote(pc1, round), None);
+    let pc2 = new_signed_precommit(height, round, NilOrVal::Val(ValueId::new(2)), addr1);
+    assert_eq!(keeper.apply_vote(pc2, round), None);
+
+    // Second equivocation from the same validator, on its prevote this time.
+    let pv1 = new_signed_prevote(height, round, NilOrVal::Val(ValueId::new(2)), addr1);
+    assert_eq!(keeper.apply_vote(pv1, round), None);
+    let pv2 = new_signed_prevote(height, round, NilOrVal::Nil, addr1);
+    assert_eq!(keeper.apply_vote(pv2, round), None);
+
+    let recorded = keeper.evidence().get(&addr1).map(|e| e.len()).unwrap_or(0);
+    assert!(
+        recorded <= 1,
+        "evidence for a single validator must stay bounded at one proven pair, got {recorded}"
+    );
+}
+
+/// Pins the `polka_any_reported_on_prevote_quorum` violation: a round holding a
+/// 2f+1 prevote quorum must have reported PolkaAny for it, or a driver arming
+/// its prevote timeout on PolkaAny is starved. Driving the counterexample
+/// through the public `apply_vote` API — every validator prevoting in round 1
+/// while the node is still driving round 0 — reaches the quorum with only
+/// SkipRound(1) reported, and no prevote is left to ever trigger PolkaAny.
+/// This test FAILS on current code and pins that starvation. Note the driver
+/// compensates: on entering the round it re-derives thresholds through
+/// `is_threshold_met`, so PolkaAny is not lost system-wide.
+// reproduces polka_any_reported_on_prevote_quorum — fails on current code
+#[test]
+#[ignore]
+fn polka_any_reported_once_prevote_quorum_reached() {
+    let ([addr1, addr2, addr3], mut keeper) = setup([1, 1, 2]);
+
+    let height = Height::new(1);
+    let current = Round::new(0);
+    let future = Round::new(1);
+
+    // The whole validator set has moved on to round 1 while we still drive
+    // round 0, so every round-1 prevote arrives as a future-round vote.
+    let mut outputs = Vec::new();
+    for (addr, value) in [
+        (addr2, NilOrVal::Val(ValueId::new(1))),
+        (addr3, NilOrVal::Val(ValueId::new(2))),
+        (addr1, NilOrVal::Val(ValueId::new(1))),
+    ] {
+        let vote = new_signed_prevote(height, future, value, addr);
+        if let Some(output) = keeper.apply_vote(vote, current) {
+            outputs.push(output);
+        }
+    }
+
+    // Round 1 now holds a prevote quorum and no prevote is left to arrive.
+    assert!(keeper.is_threshold_met(&future, VoteType::Prevote, Threshold::Any));
+    assert!(
+        outputs.contains(&Output::PolkaAny),
+        "round holding a prevote quorum never reported PolkaAny, got {outputs:?}"
+    );
+}
+
+/// Pins the `tally_never_overflows` violation: accumulating votes must never
+/// push a tallied weight, or the quorum comparison computed from it, past the
+/// machine maximum where the tally aborts the node. Here the total voting power
+/// itself is small enough that `total * 2` fits in a u64 — it is the accumulated
+/// tally of a single large validator that overflows `weight * 3` inside
+/// `ThresholdParam::is_met`, which uses `.expect("attempt to multiply with
+/// overflow")`. `VoteKeeper::new` accepts the validator set without complaint
+/// and the first well-formed prevote takes the node down, so this test FAILS on
+/// current code and pins the tally-overflow abort.
+// reproduces tally_never_overflows — fails on current code
+#[test]
+#[ignore]
+fn tally_never_overflows_on_accumulated_weight() {
+    // total * 2 fits in a u64; weight * 3 for the first validator does not.
+    let big = 6_500_000_000_000_000_000;
+    let small = 2_500_000_000_000_000_000;
+    let ([addr1, _addr2], mut keeper) = setup([big, small]);
+    assert_eq!(keeper.total_weight(), big + small);
+
+    let vote = new_signed_prevote(
+        Height::new(1),
+        Round::new(0),
+        NilOrVal::Val(ValueId::new(1)),
+        addr1,
+    );
+
+    // Tallying this vote must not abort the node.
+    keeper.apply_vote(vote, Round::new(0));
+}
+
+/// Real network noise around the keeper's main job: a vote from a validator
+/// outside the set is discarded, a future-round vote reports SkipRound, a second
+/// future-round vote from the same round is suppressed as a duplicate output,
+/// and a genuine prevote quorum in that round still reports PolkaAny.
+#[test]
+fn unknown_vote_discarded_then_skip_round_suppressed_then_polka_any() {
+    let ([addr1, addr2, addr3], mut keeper) = setup([1, 1, 2]);
+
+    // An address that is not part of the validator set.
+    let outsider = Address::from_public_key(&PrivateKey::from([9; 32]).public_key());
+
+    let height = Height::new(1);
+    let round0 = Round::new(0);
+    let round1 = Round::new(1);
+
+    // Nothing to prune and no evidence yet.
+    keeper.prune_votes(round0);
+    assert!(keeper.take_evidence().is_empty());
+    assert!(keeper.take_evidence().is_empty());
+
+    // A vote from outside the validator set is discarded.
+    let vote = new_signed_prevote(height, round0, NilOrVal::Val(ValueId::new(1)), outsider);
+    assert_eq!(keeper.apply_vote(vote, round0), None);
+
+    // The heaviest validator prevotes in the next round: f+1 honest weight for a
+    // future round, so the keeper tells the driver to skip to it.
+    let vote = new_signed_prevote(height, round1, NilOrVal::Val(ValueId::new(1)), addr3);
+    assert_eq!(keeper.apply_vote(vote, round0), Some(Output::SkipRound(round1)));
+
+    // A second future-round vote would report SkipRound(1) again; it is suppressed.
+    let vote = new_signed_precommit(height, round1, NilOrVal::Nil, addr1);
+    assert_eq!(keeper.apply_vote(vote, round0), None);
+
+    // Now driving round 1, a prevote quorum spread over two values is PolkaAny.
+    let vote = new_signed_prevote(height, round1, NilOrVal::Val(ValueId::new(2)), addr2);
+    assert_eq!(keeper.apply_vote(vote, round1), Some(Output::PolkaAny));
 }

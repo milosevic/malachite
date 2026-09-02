@@ -55,6 +55,32 @@ impl ItfRunner for VoteKeeperRunner {
 
         self.addresses = build_address_map(public_keys);
 
+        // Oracle: log the initialization action so the oracle can replay the trace.
+        // Arg names `initialHeight` and `vs` must match the spec's nondet names exactly,
+        // and values must use the ITF JSON encoding quint produces (ints as {"#bigint": ".."}).
+        // Quint's canonical ITF map encoding lists entries with keys SORTED; the model's
+        // validator set is a HashMap (random iteration order), so sort by key to match the
+        // spec's `oneOf(Set(<maps>))` domain member exactly and let the pick pin.
+        let mut val_set_sorted: Vec<(&String, &i64)> = validator_weights.iter().collect();
+        val_set_sorted.sort_by(|a, b| a.0.cmp(b.0));
+        let val_set_pairs: Vec<serde_json::Value> = val_set_sorted
+            .iter()
+            .map(|(k, v)| serde_json::json!([k, { "#bigint": v.to_string() }]))
+            .collect();
+        crate::oracle_client::log_action(
+            "initialized",
+            &[
+                crate::oracle_client::OracleArg {
+                    name: "initialHeight",
+                    value: serde_json::json!({ "#bigint": expected.bookkeeper.height.to_string() }),
+                },
+                crate::oracle_client::OracleArg {
+                    name: "vs",
+                    value: serde_json::json!({ "#map": val_set_pairs }),
+                },
+            ],
+        );
+
         Ok(VoteKeeper::new(validator_set, ThresholdParams::default()))
     }
 
@@ -96,10 +122,50 @@ impl ItfRunner for VoteKeeperRunner {
                 debug_assert_eq!(*weight as u64, validator.voting_power);
 
                 // Execute step.
-                Ok(actual.apply_vote(
+                let result = actual.apply_vote(
                     SignedVote::new(vote, Signature::test()),
                     Round::from(*current_round),
-                ))
+                );
+
+                // Oracle: log flat args whose names match the spec's nondet names exactly
+                // so the oracle's guided replay can pin each arg to the concrete value.
+                // Values must use the ITF JSON encoding quint produces: nullary variants
+                // carry an explicit unit `value` ({"#tup": []}) and ints are {"#bigint": ".."}.
+                let vote_type_tag = match &input_vote.vote_type {
+                    VoteType::Prevote => "Prevote",
+                    VoteType::Precommit => "Precommit",
+                };
+                let value_id_json = match &input_vote.value_id {
+                    crate::types::Value::Nil => serde_json::json!({"tag": "Nil", "value": {"#tup": []}}),
+                    crate::types::Value::Val(v) => serde_json::json!({"tag": "Val", "value": v}),
+                };
+                crate::oracle_client::log_action(
+                    "apply_vote",
+                    &[
+                        crate::oracle_client::OracleArg {
+                            name: "addr",
+                            value: serde_json::json!(input_vote.src_address),
+                        },
+                        crate::oracle_client::OracleArg {
+                            name: "vtype",
+                            value: serde_json::json!({"tag": vote_type_tag, "value": {"#tup": []}}),
+                        },
+                        crate::oracle_client::OracleArg {
+                            name: "r",
+                            value: serde_json::json!({ "#bigint": input_vote.round.to_string() }),
+                        },
+                        crate::oracle_client::OracleArg {
+                            name: "value",
+                            value: value_id_json,
+                        },
+                        crate::oracle_client::OracleArg {
+                            name: "cr",
+                            value: serde_json::json!({ "#bigint": current_round.to_string() }),
+                        },
+                    ],
+                );
+
+                Ok(result)
             }
         }
     }

@@ -1,0 +1,38 @@
+{
+  "components": {
+    "consensus-wal": {
+      "name": "Consensus WAL",
+      "observations": [
+        "hasDurable",
+        "hasDrainedNonEmpty",
+        "hasOverflowed",
+        "hasDroppedOnRecovery"
+      ]
+    }
+  },
+  "format": "quint-oracle-config",
+  "main": "consensusWal",
+  "maxSamples": 1000,
+  "maxSteps": 200,
+  "observations": [
+    "hasDurable",
+    "hasDrainedNonEmpty",
+    "hasOverflowed",
+    "hasDroppedOnRecovery"
+  ],
+  "randomSteps": true,
+  "reportDir": "/Users/zarkomilosevic/Library/Application Support/systems.informal.quint.studio/assessments/circlefin_malachite/pr-1551/oracle",
+  "spec": "consensus-wal.pr-1551.qnt",
+  "stepReplayBudget": 50,
+  "studio": {
+    "model": "consensus-wal.pr-1551.qnt",
+    "system": "Consensus WAL"
+  },
+  "testCommand": [
+    "bash",
+    "-c",
+    "true"
+  ],
+  "unguidedStepBudget": 10,
+  "version": 1
+}

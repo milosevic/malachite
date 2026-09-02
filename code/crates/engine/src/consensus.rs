@@ -1146,6 +1146,12 @@ where
         is_validator: bool,
     ) -> Result<(), ActorProcessingErr> {
         if phase == Phase::Recovering || !is_validator {
+            quint_oracle::log!(
+                consensus_wal_append_and_broadcast,
+                recovering: true,
+                [wal],
+            );
+
             return Ok(());
         }
 
@@ -1162,6 +1168,12 @@ where
                 error!("Failed to send Append command to WAL actor: {e}");
             }
         }
+
+        quint_oracle::log!(
+            consensus_wal_append_and_broadcast,
+            recovering: false,
+            [wal],
+        );
 
         Ok(())
     }
