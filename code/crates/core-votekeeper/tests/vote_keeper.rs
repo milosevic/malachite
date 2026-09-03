@@ -3,6 +3,7 @@ use malachitebft_core_types::{
     NilOrVal, Round, SignedExtension, SignedVote, Threshold, Vote as _, VoteType,
 };
 
+use arc_malachitebft_core_votekeeper::evidence::MAX_EVIDENCE_PER_VALIDATOR;
 use arc_malachitebft_core_votekeeper::keeper::{Output, VoteKeeper};
 
 use malachitebft_test::{
@@ -576,10 +577,11 @@ fn precommit_value_after_skip_round_in_future_round() {
     assert_eq!(emitted.len(), 2);
 }
 
-/// Characterization test for the unbounded-evidence hazard: a single
-/// equivocating validator can append one evidence entry per fresh conflicting
-/// value, `add` dedupes only exact repeats of the same ordered pair, and
-/// `prune_votes` never touches the evidence map.
+/// Characterization test for per-validator evidence retention: a single
+/// equivocating validator appends one evidence entry per fresh conflicting
+/// value up to `MAX_EVIDENCE_PER_VALIDATOR` and no further, `add` dedupes exact
+/// repeats of the same ordered pair, and `prune_votes` never touches the
+/// evidence map.
 #[test]
 fn repeated_equivocation_grows_evidence_and_survives_prune() {
     let ([addr1, ..], mut keeper) = setup([1, 1, 1, 1]);
@@ -597,11 +599,11 @@ fn repeated_equivocation_grows_evidence_and_survives_prune() {
         assert_eq!(keeper.apply_vote(vote, round), None);
     }
 
-    // Every fresh conflicting value appended a new entry: growth is unbounded
-    // in the number of equivocations, not capped at one proven pair.
+    // Fresh conflicting values append new entries only up to the retention cap;
+    // beyond it, further pairs from the same validator are dropped.
     assert_eq!(
         keeper.evidence().get(&addr1).map(|e| e.len()),
-        Some(CONFLICTS as usize)
+        Some(MAX_EVIDENCE_PER_VALIDATOR)
     );
 
     // An exact repeat of an already recorded pair is the only thing deduped.
@@ -609,7 +611,7 @@ fn repeated_equivocation_grows_evidence_and_survives_prune() {
     assert_eq!(keeper.apply_vote(repeat, round), None);
     assert_eq!(
         keeper.evidence().get(&addr1).map(|e| e.len()),
-        Some(CONFLICTS as usize)
+        Some(MAX_EVIDENCE_PER_VALIDATOR)
     );
 
     // Pruning the round drops the per-round votes but leaves the evidence.
@@ -617,12 +619,12 @@ fn repeated_equivocation_grows_evidence_and_survives_prune() {
     assert_eq!(keeper.rounds(), 0);
     assert_eq!(
         keeper.evidence().get(&addr1).map(|e| e.len()),
-        Some(CONFLICTS as usize)
+        Some(MAX_EVIDENCE_PER_VALIDATOR)
     );
 
     // Only the caller taking the evidence releases it.
     let taken = keeper.take_evidence();
-    assert_eq!(taken.get(&addr1).map(|e| e.len()), Some(CONFLICTS as usize));
+    assert_eq!(taken.get(&addr1).map(|e| e.len()), Some(MAX_EVIDENCE_PER_VALIDATOR));
     assert!(keeper.evidence().is_empty());
 }
 

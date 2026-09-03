@@ -383,7 +383,7 @@ where
                             quint_oracle::PathSeg::ident("ghost"),
                             quint_oracle::PathSeg::ident("evidenceCount"),
                         ]),
-                        self.evidence.iter().count() as i64,
+                        self.evidence.len() as i64,
                     )
                     .scope("vote-keeper")
                     .send();
@@ -431,7 +431,7 @@ where
                                 quint_oracle::PathSeg::ident("ghost"),
                                 quint_oracle::PathSeg::ident("evidenceCount"),
                             ]),
-                            self.evidence.iter().count() as i64,
+                            self.evidence.len() as i64,
                         )
                         .scope("vote-keeper")
                         .send();
@@ -523,7 +523,7 @@ where
                         quint_oracle::PathSeg::ident("ghost"),
                         quint_oracle::PathSeg::ident("evidenceCount"),
                     ]),
-                    self.evidence.iter().count() as i64,
+                    self.evidence.len() as i64,
                 )
                 .scope("vote-keeper")
                 .send();
@@ -568,7 +568,7 @@ where
                         quint_oracle::PathSeg::ident("ghost"),
                         quint_oracle::PathSeg::ident("evidenceCount"),
                     ]),
-                    self.evidence.iter().count() as i64,
+                    self.evidence.len() as i64,
                 )
                 .scope("vote-keeper")
                 .send();

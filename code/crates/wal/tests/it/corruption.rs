@@ -482,3 +482,67 @@ fn oversized_entry_is_rejected_by_append() -> io::Result<()> {
 
     Ok(())
 }
+
+/// Navigates to entry `idx`'s 8-byte length field and sets a high bit in it,
+/// the way a bit flip on disk would. The entry's data and CRC are untouched;
+/// only the frame that says how long it is becomes nonsense.
+fn corrupt_wal_entry_length(path: &Path, idx: usize) -> io::Result<()> {
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+
+    file.seek(SeekFrom::Start(HEADER_SIZE))?;
+
+    for _ in 0..idx {
+        read_u8(&mut file)?; // skip compression flag
+        let entry_len = read_u64(&mut file)?;
+        read_u32(&mut file)?; // skip CRC
+        file.seek(SeekFrom::Current(entry_len as i64))?; // skip entry data
+    }
+
+    read_u8(&mut file)?; // skip compression flag
+
+    let length_pos = file.stream_position()?;
+    let length = read_u64(&mut file)?;
+
+    file.seek(SeekFrom::Start(length_pos))?;
+    write_u64(&mut file, length | (1 << 40))?;
+
+    file.sync_all()
+}
+
+/// reproduces obs:open_dropped_intact_entries — fails on current code.
+///
+/// A bit flip in one entry's length field leaves every other entry on disk
+/// exactly as it was written. But the recovery scan in `Log::open` walks the
+/// file by those length fields, so it cannot get past the damaged frame: it
+/// stops there and truncates the file at that point, permanently deleting the
+/// later entries even though their data and CRCs are perfectly valid.
+///
+/// Driven through the crate's public production API — `Log::open`, `append`,
+/// `iter`, default features — with the damage applied to the closed file, as
+/// bit rot would.
+///
+/// The contract: the recovery scan must keep the entries that still read back
+/// cleanly.
+///
+/// Ignored because it fails on current code.
+#[test]
+#[ignore]
+fn open_keeps_intact_entries_after_a_corrupted_length_field() -> io::Result<()> {
+    let path = testwal!();
+
+    setup_valid_wal(&path, 4)?;
+
+    // Entry 1's length field rots; entries 0, 2 and 3 are untouched.
+    corrupt_wal_entry_length(&path, 1)?;
+
+    let mut wal = Log::open(&path)?;
+    let recovered: Vec<_> = wal.iter()?.filter_map(Result::ok).collect();
+
+    assert_eq!(
+        recovered.len(),
+        3,
+        "the recovery scan deleted the intact entries after the damaged frame"
+    );
+
+    Ok(())
+}

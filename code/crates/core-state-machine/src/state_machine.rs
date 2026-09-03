@@ -181,9 +181,7 @@ where
         //
 
         // L18
-        (Step::Propose, Input::ProposeValue(value)) if this_round => {
-            debug_assert!(info.is_proposer());
-
+        (Step::Propose, Input::ProposeValue(value)) if this_round && info.is_proposer() => {
             propose(ctx, state, value, info.address)
         }
 

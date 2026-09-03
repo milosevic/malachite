@@ -5,4 +5,7 @@ mod node_supervisor;
 mod sync;
 mod validator_proof;
 mod vote_extension;
+mod wal_append;
+mod wal_replay;
+mod wal_started_height;
 mod wal_codec;

@@ -5081,14 +5081,11 @@ fn driver_steps_polka_previous_locked_on_other_value_at_lower_round_l30() {
 // L18: only the proposer for the round may emit a Proposal.
 //
 // We (v3) are not the proposer for round 0 (v1 is). Feeding `ProposeValue` anyway must not
-// produce a `Output::Propose` signed by us; the state machine catches the caller bug with
-// `debug_assert!(info.is_proposer())` and aborts instead.
-//
-// NOTE: this only holds where debug assertions are enabled; in a release build the guard is
-// stripped and a non-proposer would emit a proposal.
+// produce an `Output::Propose` signed by us: the L18 arm guards on `info.is_proposer()`, so the
+// input falls through to the catch-all invalid transition — no output, state untouched. This is
+// a plain match guard, so it holds in release builds as well.
 #[test]
-#[should_panic(expected = "info.is_proposer()")]
-fn driver_propose_value_when_not_proposer_panics() {
+fn driver_propose_value_when_not_proposer_is_invalid() {
     let value = Value::new(9999);
 
     let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
@@ -5195,18 +5192,15 @@ fn driver_new_round_does_not_move_the_round_backwards() {
     run_steps(&mut driver, steps)
 }
 
-// reproduces obs:proposal_emitted_by_non_proposer — fails on current code.
-//
 // Contract (spec `only_proposer_emits_proposal`): a node that is not the proposer for a round
 // must never emit a `Proposal` output for that round.
 //
 // The driver's `Input::ProposeValue` path (`apply_propose_value`, driver.rs) forwards the value
-// to the state machine without checking who the proposer is; `state_machine::apply`'s L18 arm
-// only guards it with `debug_assert!(info.is_proposer())`. So on a driver started for a round
-// whose proposer is another validator, a `ProposeValue` input either aborts the node (debug) or
-// silently emits a proposal signed by us (release) — neither is a rejection.
+// to the state machine without checking who the proposer is, so the rejection has to happen in
+// `state_machine::apply`'s L18 arm, which guards on `info.is_proposer()`. The guard is a real
+// match guard rather than a `debug_assert!`, so this holds in release builds too: the input
+// falls through to the catch-all invalid transition and no proposal is emitted.
 #[test]
-#[ignore]
 fn driver_propose_value_by_non_proposer_is_rejected() {
     let value = Value::new(9999);
 

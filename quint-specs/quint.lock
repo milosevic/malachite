@@ -759,51 +759,6 @@ name = "driver_steps_polka_previous_locked_on_other_value_at_lower_round_l30"
 path = "code/crates/core-driver/tests/it/extra.rs"
 
 [[behaviorTests.rows]]
-behaviorId = "prevote-quorum-always-reports-polkaany-too"
-component = "vote-keeper"
-headline = "Prevote quorum always reports PolkaAny too"
-kind = "hazard"
-note = "Hazard confirmed still present: a round reaching a 2f+1 prevote quorum can report only SkipRound/PolkaValue, never PolkaAny. The enforcing test polka_any_reported_once_prevote_quorum_reached exists in tests/vote_keeper.rs but stays #[ignore]d because it fails on current code; user again declined the production fix, so nothing would go red."
-recordedAt = 1788013353803
-status = "untested"
-tests = []
-
-[[behaviorTests.rows]]
-behaviorId = "one-equivocator-can-t-grow-evidence-without-bound"
-component = "vote-keeper"
-headline = "One equivocator can't grow evidence without bound"
-kind = "hazard"
-note = "Hazard confirmed still present: EvidenceMap::add appends one entry per fresh conflicting value and prune_votes never touches the map. The enforcing test evidence_stays_bounded_per_validator exists but stays #[ignore]d (observed 2 entries for one validator); user again declined the production fix."
-recordedAt = 1788013357323
-status = "untested"
-tests = []
-
-[[behaviorTests.rows]]
-behaviorId = "a-large-validator-set-can-t-panic-the-tally"
-component = "vote-keeper"
-headline = "A large validator set can't panic the tally"
-kind = "hazard"
-note = "Hazard confirmed still present: ThresholdParam::is_met (core-types/src/threshold.rs:71) multiplies in u64 and .expect()s, so a well-formed vote aborts the node — reproduced as 'attempt to multiply with overflow'. The enforcing test tally_never_overflows_on_accumulated_weight stays #[ignore]d; user again declined the u128 widening."
-recordedAt = 1788013361153
-status = "untested"
-tests = []
-
-[[behaviorTests.rows]]
-behaviorId = "a-non-proposer-never-emits-a-proposal"
-component = "round-state-machine"
-headline = "A non-proposer never emits a proposal"
-kind = "hazard"
-note = "Test passes and pins debug_assert!(info.is_proposer()), so removing that guard goes red under debug assertions; release builds strip it and would still emit a proposal from a non-proposer — that half needs a real guard returning Transition::invalid (code change)."
-recordedAt = 1788193925270
-status = "partial"
-
-[[behaviorTests.rows.tests]]
-hash = "fnv1a64:cebbdb3f570d4b31"
-line = 4487
-name = "driver_propose_value_when_not_proposer_panics"
-path = "code/crates/core-driver/tests/it/extra.rs"
-
-[[behaviorTests.rows]]
 behaviorId = "proposals-from-two-validators-never-panic-the-node"
 component = "equivocation-detection"
 headline = "Proposals from two validators never panic the node"
@@ -901,6 +856,57 @@ recordedAt = 1788340876198
 status = "untested"
 tests = []
 
+[[behaviorTests.rows]]
+behaviorId = "a-non-proposer-never-emits-a-proposal"
+component = "round-state-machine"
+headline = "A non-proposer never emits a proposal"
+kind = "hazard"
+note = "The L18 arm now guards on info.is_proposer() as a real match guard (debug_assert removed), so the rejection holds in release builds; both tests fail with a Propose output when the guard is removed."
+recordedAt = 1788361122313
+status = "enforced"
+
+[[behaviorTests.rows.tests]]
+hash = "fnv1a64:9111ef991b65d8ba"
+line = 5088
+name = "driver_propose_value_when_not_proposer_is_invalid"
+path = "code/crates/core-driver/tests/it/extra.rs"
+
+[[behaviorTests.rows.tests]]
+hash = "fnv1a64:9111ef991b65d8ba"
+line = 5204
+name = "driver_propose_value_by_non_proposer_is_rejected"
+path = "code/crates/core-driver/tests/it/extra.rs"
+
+[[behaviorTests.rows]]
+behaviorId = "prevote-quorum-always-reports-polkaany-too"
+component = "vote-keeper"
+headline = "Prevote quorum always reports PolkaAny too"
+kind = "hazard"
+note = "Hazard still present (re-verified: quorum round reported only [SkipRound(Some(1))]). polka_any_reported_once_prevote_quorum_reached in tests/vote_keeper.rs is a correct reproduction but stays #[ignore]d because it fails on current code; user declined the production fix again, so nothing would go red."
+recordedAt = 1788361404084
+status = "untested"
+tests = []
+
+[[behaviorTests.rows]]
+behaviorId = "one-equivocator-can-t-grow-evidence-without-bound"
+component = "vote-keeper"
+headline = "One equivocator can't grow evidence without bound"
+kind = "hazard"
+note = "Hazard still present (re-verified: 2 evidence entries for one validator). evidence_stays_bounded_per_validator in tests/vote_keeper.rs reproduces it but stays #[ignore]d because it fails on current code; user declined capping EvidenceMap, so nothing would go red."
+recordedAt = 1788361410909
+status = "untested"
+tests = []
+
+[[behaviorTests.rows]]
+behaviorId = "a-large-validator-set-can-t-panic-the-tally"
+component = "vote-keeper"
+headline = "A large validator set can't panic the tally"
+kind = "hazard"
+note = "Hazard still present (re-verified: 'attempt to multiply with overflow' at core-types/src/threshold.rs:71). tally_never_overflows_on_accumulated_weight in tests/vote_keeper.rs reproduces it but stays #[ignore]d because it aborts on current code; user declined the u128 widening, so nothing would go red."
+recordedAt = 1788361416678
+status = "untested"
+tests = []
+
 [[behaviorTests.picks]]
 behaviorId = "precommitvalue-outranks-skipround-in-a-future-round"
 component = "vote-keeper"
@@ -913,27 +919,6 @@ behaviorId = "locked-node-unlocks-for-an-older-polka"
 component = "round-state-machine"
 kind = "goal"
 requestedAt = 1788010377747
-settled = true
-
-[[behaviorTests.picks]]
-behaviorId = "prevote-quorum-always-reports-polkaany-too"
-component = "vote-keeper"
-kind = "hazard"
-requestedAt = 1788013203525
-settled = true
-
-[[behaviorTests.picks]]
-behaviorId = "one-equivocator-can-t-grow-evidence-without-bound"
-component = "vote-keeper"
-kind = "hazard"
-requestedAt = 1788013203525
-settled = true
-
-[[behaviorTests.picks]]
-behaviorId = "a-large-validator-set-can-t-panic-the-tally"
-component = "vote-keeper"
-kind = "hazard"
-requestedAt = 1788013203525
 settled = true
 
 [[behaviorTests.picks]]
@@ -961,7 +946,28 @@ settled = true
 behaviorId = "a-non-proposer-never-emits-a-proposal"
 component = "round-state-machine"
 kind = "hazard"
-requestedAt = 1788193800119
+requestedAt = 1788360950815
+settled = true
+
+[[behaviorTests.picks]]
+behaviorId = "prevote-quorum-always-reports-polkaany-too"
+component = "vote-keeper"
+kind = "hazard"
+requestedAt = 1788361308448
+settled = true
+
+[[behaviorTests.picks]]
+behaviorId = "one-equivocator-can-t-grow-evidence-without-bound"
+component = "vote-keeper"
+kind = "hazard"
+requestedAt = 1788361308448
+settled = true
+
+[[behaviorTests.picks]]
+behaviorId = "a-large-validator-set-can-t-panic-the-tally"
+component = "vote-keeper"
+kind = "hazard"
+requestedAt = 1788361308448
 settled = true
 
 [systemAnalyses.consensus-orchestrator-wal]
@@ -2401,6 +2407,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.byzantine-fault-injection]
 name = "Byzantine Fault Injection"
@@ -2468,6 +2475,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.consensus-orchestrator]
 name = "Consensus Orchestrator"
@@ -2598,6 +2606,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = true
 setupCompleted = false
+cardsDone = false
 
 [components.consensus-orchestrator.oracle]
 format = "quint-oracle-config"
@@ -2895,6 +2904,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.driver]
 name = "Driver"
@@ -2965,6 +2975,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.engine-actors]
 name = "Engine Actor Layer"
@@ -3045,6 +3056,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.equivocation-detection]
 name = "Equivocation Detection"
@@ -3101,6 +3113,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [[components.equivocation-detection.productIntent.goals]]
 claim = "It should be possible to receive the same pair of conflicting votes repeatedly and end with exactly one evidence record for that validator."
@@ -3599,6 +3612,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.message-codec]
 name = "Message Codec"
@@ -3663,6 +3677,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.node-config]
 name = "Node Configuration"
@@ -3714,6 +3729,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.p2p-network]
 name = "P2P Network"
@@ -3788,6 +3804,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.peer-discovery]
 name = "Peer Discovery"
@@ -3868,6 +3885,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.peer-discovery.oracle]
 format = "quint-oracle-config"
@@ -4079,6 +4097,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.round-state-machine]
 name = "Round State Machine"
@@ -4132,7 +4151,7 @@ specHints = "state_machine.rs:71 apply() is the single transition function; each
 cardRead = false
 connectionsRead = false
 spec = "quint-specs/round-state-machine.qnt"
-version = 5
+version = 6
 observationsConfirmed = true
 propertiesConfirmed = true
 confirmedObservations = [
@@ -4183,6 +4202,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = true
 setupCompleted = true
+cardsDone = false
 
 [[components.round-state-machine.productIntent.goals]]
 claim = "It should be possible to prevote a value we are not locked on, when the proposal carries a polka from a round at or above our lock round."
@@ -4890,7 +4910,7 @@ name = "only_proposer_emits_proposal"
 type = "invariant"
 
 [components.round-state-machine.fingerprints]
-spec = "fnv1a64:340b504ff581821c"
+spec = "fnv1a64:9f0e33247dc61c3e"
 oracle = "fnv1a64:ae4d6221d9bc3816"
 
 [components.round-state-machine.fingerprints.code]
@@ -4898,14 +4918,14 @@ oracle = "fnv1a64:ae4d6221d9bc3816"
 "code/crates/core-state-machine/src/lib.rs" = "fnv1a64:5f5314f3b45eeb34"
 "code/crates/core-state-machine/src/output.rs" = "fnv1a64:41e5ce5ca409d7f2"
 "code/crates/core-state-machine/src/state.rs" = "fnv1a64:3134f165db6f35b1"
-"code/crates/core-state-machine/src/state_machine.rs" = "fnv1a64:796410368ae6feb5"
+"code/crates/core-state-machine/src/state_machine.rs" = "fnv1a64:48bc0cf2dcff562e"
 "code/crates/core-state-machine/src/traces/line.rs" = "fnv1a64:a6608a737f9cd7b7"
 "code/crates/core-state-machine/src/traces/mod.rs" = "fnv1a64:74a62aa70b982a20"
 "code/crates/core-state-machine/src/traces/trace.rs" = "fnv1a64:ed55f2d4ecfcb4fd"
 "code/crates/core-state-machine/src/transition.rs" = "fnv1a64:03060cd921876a6c"
 
 [components.round-state-machine.fingerprints.instrumented]
-"code/crates/core-state-machine/src/state_machine.rs" = "fnv1a64:796410368ae6feb5"
+"code/crates/core-state-machine/src/state_machine.rs" = "fnv1a64:48bc0cf2dcff562e"
 "quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
 "quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
 "quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
@@ -4988,6 +5008,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.test-harness]
 name = "Test Context & Fixtures"
@@ -5053,6 +5074,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.test-tooling]
 name = "Test Tooling"
@@ -5124,6 +5146,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.validator-proof-protocol]
 name = "Validator Proof Protocol"
@@ -5176,6 +5199,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.value-sync]
 name = "Value Sync"
@@ -5259,6 +5283,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
+cardsDone = false
 
 [components.vote-keeper]
 name = "Vote Keeper"
@@ -5314,7 +5339,7 @@ specHints = "apply_vote at core-votekeeper/src/keeper.rs:249 is the single entry
 cardRead = false
 connectionsRead = false
 spec = "quint-specs/vote-keeper.qnt"
-version = 2
+version = 3
 observationsConfirmed = true
 propertiesConfirmed = true
 confirmedObservations = [
@@ -5351,6 +5376,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = true
 setupCompleted = true
+cardsDone = false
 
 [[components.vote-keeper.productIntent.goals]]
 claim = "It should be possible to receive `PrecommitValue(v)` for a round ahead of the current one, even though the f+1 skip threshold for that round is already met."
@@ -6240,12 +6266,12 @@ name = "tally_never_overflows"
 type = "invariant"
 
 [components.vote-keeper.fingerprints]
-spec = "fnv1a64:9f4174851a80e001"
+spec = "fnv1a64:ba371bcf4937f093"
 oracle = "fnv1a64:c98f2e0eb4cbf82a"
 
 [components.vote-keeper.fingerprints.code]
 "code/crates/core-votekeeper/src/count.rs" = "fnv1a64:61444fa5f86e76ff"
-"code/crates/core-votekeeper/src/keeper.rs" = "fnv1a64:4199b743d57c1c54"
+"code/crates/core-votekeeper/src/keeper.rs" = "fnv1a64:3e277875763aab1b"
 "code/crates/core-votekeeper/src/lib.rs" = "fnv1a64:d0e2b237a4a24825"
 "code/crates/core-votekeeper/src/round_votes.rs" = "fnv1a64:5d718c2ea82f34f4"
 "code/crates/core-votekeeper/src/round_weights.rs" = "fnv1a64:034e5da102cc6988"
@@ -6374,6 +6400,7 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = true
 setupCompleted = true
+cardsDone = false
 
 [[components.wal.productIntent.hazards]]
 claim = "It should be impossible to reach a state where an `Append` whose height differs from the WAL height replies `Ok` while nothing is written to the log"
@@ -7181,10 +7208,10 @@ spec = "fnv1a64:9396e5c045fbafa1"
 oracle = "fnv1a64:98f653d657075543"
 
 [components.wal.fingerprints.code]
-"code/crates/engine/src/wal.rs" = "fnv1a64:77106f4ecb8b4058"
-"code/crates/engine/src/wal/entry.rs" = "fnv1a64:cf9ac3f5d6c7d51f"
-"code/crates/engine/src/wal/iter.rs" = "fnv1a64:e69e033f7268b286"
-"code/crates/engine/src/wal/thread.rs" = "fnv1a64:c688a4ac9f50e33e"
+"code/crates/engine/src/wal.rs" = "fnv1a64:b67412299dd83339"
+"code/crates/engine/src/wal/entry.rs" = "fnv1a64:48363e4c61e99b9b"
+"code/crates/engine/src/wal/iter.rs" = "fnv1a64:66a9cef87b850a30"
+"code/crates/engine/src/wal/thread.rs" = "fnv1a64:fc38eb3b3c84d4d5"
 "code/crates/wal/src/ext.rs" = "fnv1a64:0d873df9ed41ffc9"
 "code/crates/wal/src/file.rs" = "fnv1a64:05a2d48ee88dc6fc"
 "code/crates/wal/src/lib.rs" = "fnv1a64:4f4ab987f67dee3d"
