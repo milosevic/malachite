@@ -15,10 +15,12 @@ all-features = true
 [dependencies]
 malachitebft-core-types = { workspace = true }
 quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
-
-derive-where = { workspace = true }
-thiserror = { workspace = true, default-features = false }
 tracing = { workspace = true, default-features = false }
 
+derive-where = { workspace = true }
+
+thiserror = { workspace = true, default-features = false }
+
 [dev-dependencies]
+bytes = { workspace = true }
 malachitebft-test = { workspace = true }

@@ -89,7 +89,13 @@ where
     Ctx: Context,
 {
     match input {
-        Input::StartHeight(height, validator_set, is_restart, target_time) => {
+        Input::StartHeight(
+            height,
+            validator_set,
+            is_restart,
+            target_time,
+            vote_extension_policy,
+        ) => {
             let result = reset_and_start_height(
                 co,
                 state,
@@ -98,6 +104,7 @@ where
                 validator_set,
                 is_restart,
                 target_time,
+                vote_extension_policy,
             )
             .await;
 
