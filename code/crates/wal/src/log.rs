@@ -49,7 +49,34 @@ pub struct LogEntry<'a, S> {
     log: &'a mut Log<S>,
 }
 
-impl<S> LogEntry<'_, S>
+/// The outcome of reading one entry.
+///
+/// A damaged entry does not have to end the scan: the entries are
+/// length-framed, so a payload that fails its CRC (or fails to decompress)
+/// says nothing about the framing of the entries behind it. Whenever the
+/// stream is still positioned on an entry boundary, `next` carries the
+/// continuation so the reader can report the damage and carry on.
+pub struct EntryRead<'a, S> {
+    /// `Ok(())` when the entry read back cleanly, `Err` when it did not.
+    pub result: io::Result<()>,
+
+    /// The entry that follows, when the stream is still positioned at an entry
+    /// boundary and the log has more entries. `None` ends the scan.
+    pub next: Option<LogEntry<'a, S>>,
+}
+
+impl<'a, S> EntryRead<'a, S> {
+    /// The stream is no longer positioned on a known entry boundary, so the
+    /// scan cannot continue.
+    fn fatal(error: io::Error) -> Self {
+        Self {
+            result: Err(error),
+            next: None,
+        }
+    }
+}
+
+impl<'a, S> LogEntry<'a, S>
 where
     S: Storage,
 {
@@ -68,6 +95,39 @@ where
         read_u32(&mut self.log.storage)
     }
 
+    /// The continuation of the scan, given that the stream is positioned at
+    /// the start of the next entry: `Some(self)` while entries remain, `None`
+    /// at the end of the file or if the position cannot be determined.
+    fn continuation(self) -> Option<Self> {
+        let pos = self.log.storage.stream_position().ok()?;
+        let len = self.log.storage.size_bytes().ok()?;
+
+        (pos < len).then_some(self)
+    }
+
+    /// A damaged entry whose payload was already consumed, so the stream sits
+    /// on the next entry's header and the scan can continue past it.
+    fn damaged(self, error: io::Error) -> EntryRead<'a, S> {
+        EntryRead {
+            result: Err(error),
+            next: self.continuation(),
+        }
+    }
+
+    /// A damaged entry whose payload has *not* been consumed: skip `length`
+    /// bytes to reach the next entry's header, and continue from there.
+    fn skip_over(self, error: io::Error, length: u64) -> EntryRead<'a, S> {
+        let Ok(offset) = i64::try_from(length) else {
+            return EntryRead::fatal(error);
+        };
+
+        if self.log.storage.seek(SeekFrom::Current(offset)).is_err() {
+            return EntryRead::fatal(error);
+        }
+
+        self.damaged(error)
+    }
+
     /// Reads the current entry's data and advances to the next entry.
     /// The entry data is written to the provided writer.
     ///
@@ -75,57 +135,86 @@ where
     /// * `writer` - The writer to output the entry data to
     ///
     /// # Returns
-    /// * `Ok(Some(self))` - If there are more entries to read
-    /// * `Ok(None)` - If this was the last entry
-    /// * `Err` - If an I/O error occurs or the CRC check fails
-    pub fn read_to_next<W: Write>(mut self, writer: &mut W) -> io::Result<Option<Self>> {
-        let is_compressed = self.read_compression_flag()?;
-        let length = self.read_length()? as usize;
-        let expected_crc = self.read_crc()?;
+    /// An [`EntryRead`]: whether this entry read back cleanly, plus the next
+    /// entry when the scan can continue. A CRC mismatch, a failed
+    /// decompression or an oversized length field damages only the entry it
+    /// is reported for — the frame is still intact, so the following entries
+    /// are still readable. Only a failure that leaves the stream off an entry
+    /// boundary (a short read, an I/O error in the fixed header) ends the
+    /// scan.
+    pub fn read_to_next<W: Write>(mut self, writer: &mut W) -> EntryRead<'a, S> {
+        let is_compressed = match self.read_compression_flag() {
+            Ok(flag) => flag,
+            Err(e) => return EntryRead::fatal(e),
+        };
 
-        if length > MAX_ENTRY_SIZE {
-            return Err(io::Error::new(
+        let length = match self.read_length() {
+            Ok(length) => length,
+            Err(e) => return EntryRead::fatal(e),
+        };
+
+        let expected_crc = match self.read_crc() {
+            Ok(crc) => crc,
+            Err(e) => return EntryRead::fatal(e),
+        };
+
+        if length > MAX_ENTRY_SIZE as u64 {
+            // The open-time scan framed this entry with the very same length
+            // field, so skipping that many bytes still lands on the next
+            // entry's header.
+            let error = io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Entry size {length} exceeds maximum of {MAX_ENTRY_SIZE}"),
-            ));
+            );
+
+            return self.skip_over(error, length);
         }
 
-        let mut data = vec![0; length];
-        self.log.storage.read_exact(&mut data)?;
+        let mut data = vec![0; length as usize];
+        if let Err(e) = self.log.storage.read_exact(&mut data) {
+            return EntryRead::fatal(e);
+        }
 
         #[cfg(not(feature = "compression"))]
         if is_compressed {
-            return Err(io::Error::new(
+            let error = io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Entry is compressed but compression is disabled",
-            ));
+            );
+
+            return self.damaged(error);
         }
 
         #[cfg(feature = "compression")]
         if is_compressed {
-            data = lz4_flex::decompress_size_prepended(&data).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to decompress entry: {e}"),
-                )
-            })?;
+            match lz4_flex::decompress_size_prepended(&data) {
+                Ok(decompressed) => data = decompressed,
+                Err(e) => {
+                    let error = io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Failed to decompress entry: {e}"),
+                    );
+
+                    return self.damaged(error);
+                }
+            }
         }
 
         let actual_crc = compute_crc(&data);
 
         if expected_crc != actual_crc {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "CRC mismatch"));
+            let error = io::Error::new(io::ErrorKind::InvalidData, "CRC mismatch");
+
+            return self.damaged(error);
         }
 
-        writer.write_all(&data)?;
+        if let Err(e) = writer.write_all(&data) {
+            return EntryRead::fatal(e);
+        }
 
-        let pos = self.log.storage.stream_position()?;
-        let len = self.log.storage.size_bytes()?;
-
-        if pos < len {
-            Ok(Some(self))
-        } else {
-            Ok(None)
+        EntryRead {
+            result: Ok(()),
+            next: self.continuation(),
         }
     }
 }
@@ -147,6 +236,10 @@ where
 pub struct Log<S> {
     storage: S,
     path: PathBuf,
+    /// Oracle-only: this log's stable identity in the `PATHS` domain, assigned
+    /// when the log is opened so every thread that later drives it reports the
+    /// same path.
+    oracle_path: usize,
     version: Version,
     sequence: u64,
     len: usize,
@@ -258,6 +351,7 @@ where
     /// * `Err` - If file operations fail or existing WAL is invalid
     pub fn open_with(path: impl AsRef<Path>, options: S::OpenOptions) -> io::Result<Self> {
         let path = path.as_ref().to_owned();
+        let oracle_path = oracle_path_id(&path);
 
         let mut storage = S::open_with(&path, options)?;
 
@@ -269,7 +363,7 @@ where
             let version = Version::try_from(read_u32(&mut storage)?).map_err(|_| {
                 quint_oracle::log!(
                     Logopen,
-                    path: (oracle_path_id(&path)) @ PATHS,
+                    path: (oracle_path) @ PATHS,
                     ok: false,
                     len: 0 @ LENS,
                     [wal],
@@ -281,7 +375,7 @@ where
             let sequence = read_u64(&mut storage).map_err(|_| {
                 quint_oracle::log!(
                     Logopen,
-                    path: (oracle_path_id(&path)) @ PATHS,
+                    path: (oracle_path) @ PATHS,
                     ok: false,
                     len: 0 @ LENS,
                     [wal],
@@ -339,7 +433,7 @@ where
 
             quint_oracle::log!(
                 Logopen,
-                path: (oracle_path_id(&path)) @ PATHS,
+                path: (oracle_path) @ PATHS,
                 ok: true,
                 %len @ LENS,
                 [wal],
@@ -349,6 +443,7 @@ where
                 version,
                 storage,
                 path,
+                oracle_path,
                 sequence,
                 len,
             });
@@ -371,7 +466,7 @@ where
 
         quint_oracle::log!(
             Logopen,
-            path: (oracle_path_id(&path)) @ PATHS,
+            path: (oracle_path) @ PATHS,
             ok: true,
             len: 0 @ LENS,
             [wal],
@@ -381,6 +476,7 @@ where
             version,
             storage,
             path,
+            oracle_path,
             sequence: 0,
             len: 0,
         })
@@ -456,6 +552,18 @@ where
     }
 
     fn write_entry(&mut self, entry: WriteEntry<'_>) -> io::Result<()> {
+        // The read path refuses any entry longer than `MAX_ENTRY_SIZE`, so the
+        // write path must refuse it too instead of making it durable.
+        if entry.len() > MAX_ENTRY_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Entry size {} exceeds maximum of {MAX_ENTRY_SIZE}",
+                    entry.len()
+                ),
+            ));
+        }
+
         let pos = self.storage.seek(SeekFrom::End(0))?;
 
         let result = || -> io::Result<()> {
@@ -480,7 +588,7 @@ where
 
                 quint_oracle::log!(
                     Logappend__write_raw__write_compressed,
-                    path: (oracle_path_id(&self.path)) @ PATHS,
+                    path: (self.oracle_path) @ PATHS,
                     dataLength: (entry.len()) @ SIZES,
                     ok: true,
                     len: (self.len) @ LENS,
@@ -494,7 +602,7 @@ where
 
                 quint_oracle::log!(
                     Logappend__write_raw__write_compressed,
-                    path: (oracle_path_id(&self.path)) @ PATHS,
+                    path: (self.oracle_path) @ PATHS,
                     dataLength: (entry.len()) @ SIZES,
                     ok: false,
                     len: (self.len) @ LENS,
@@ -517,7 +625,7 @@ where
         if self.storage.size_bytes()? == 0 {
             quint_oracle::log!(
                 Logfirst_entry__iter,
-                path: (oracle_path_id(&self.path)) @ PATHS,
+                path: (self.oracle_path) @ PATHS,
                 ok: false,
                 len: (self.len) @ LENS,
                 [wal],
@@ -528,7 +636,7 @@ where
 
         quint_oracle::log!(
             Logfirst_entry__iter,
-            path: (oracle_path_id(&self.path)) @ PATHS,
+            path: (self.oracle_path) @ PATHS,
             ok: true,
             len: (self.len) @ LENS,
             [wal],
@@ -587,7 +695,7 @@ where
 
         quint_oracle::log!(
             Logreset,
-            path: (oracle_path_id(&self.path)) @ PATHS,
+            path: (self.oracle_path) @ PATHS,
             %sequence @ HEIGHTS,
             len: 0 @ LENS,
             [wal],
@@ -612,7 +720,7 @@ where
         if from_entry >= self.len as u64 {
             quint_oracle::log!(
                 Logtruncate,
-                path: (oracle_path_id(&self.path)) @ PATHS,
+                path: (self.oracle_path) @ PATHS,
                 %from_entry @ INDICES,
                 len: (self.len) @ LENS,
                 [wal],
@@ -667,7 +775,7 @@ where
 
         quint_oracle::log!(
             Logtruncate,
-            path: (oracle_path_id(&self.path)) @ PATHS,
+            path: (self.oracle_path) @ PATHS,
             %from_entry @ INDICES,
             len: (self.len) @ LENS,
             [wal],
@@ -688,7 +796,7 @@ where
 
         quint_oracle::log!(
             Logflush,
-            path: (oracle_path_id(&self.path)) @ PATHS,
+            path: (self.oracle_path) @ PATHS,
             ok: (result.is_ok()),
             len: (self.len) @ LENS,
             [wal],
@@ -712,9 +820,11 @@ where
         sequence: u64,
         len: usize,
     ) -> Self {
+        let oracle_path = oracle_path_id(&path);
+
         quint_oracle::log!(
             Logfrom_raw_parts,
-            path: (oracle_path_id(&path)) @ PATHS,
+            path: (oracle_path) @ PATHS,
             %sequence @ HEIGHTS,
             %len @ LENS,
             [wal],
@@ -723,6 +833,7 @@ where
         Self {
             storage: file,
             path,
+            oracle_path,
             version,
             sequence,
             len,
@@ -794,23 +905,17 @@ where
         let next = self.next.take()?;
 
         let idx = self.idx;
-        let path_id = oracle_path_id(&next.log.path);
+        let path_id = next.log.oracle_path;
         self.idx += 1;
 
-        match next.read_to_next(&mut buf) {
-            Ok(Some(entry)) => {
-                quint_oracle::log!(
-                    Logread_entry,
-                    path: (path_id) @ PATHS,
-                    %idx @ INDICES,
-                    ok: true,
-                    [wal],
-                );
+        let EntryRead { result, next } = next.read_to_next(&mut buf);
 
-                self.next = Some(entry);
-                Some(Ok(buf))
-            }
-            Ok(None) => {
+        // A damaged entry does not end the scan when the frame behind it is
+        // still intact: `next` carries the continuation in that case.
+        self.next = next;
+
+        match result {
+            Ok(()) => {
                 quint_oracle::log!(
                     Logread_entry,
                     path: (path_id) @ PATHS,

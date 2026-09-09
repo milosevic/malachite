@@ -87,6 +87,8 @@ where
                 self.metrics.elapsed().as_millis()
             );
 
+            crate::oracle::make_extension_step();
+
             self.adjust_peers(swarm);
 
             self.state = State::Idle;

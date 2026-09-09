@@ -186,6 +186,7 @@ fn empty_wal_operations() -> io::Result<()> {
     Ok(())
 }
 
+#[quint_oracle::test]
 #[test]
 fn concurrent_access() -> io::Result<()> {
     use std::thread;

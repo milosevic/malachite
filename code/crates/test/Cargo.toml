@@ -47,6 +47,7 @@ malachitebft-test-app.workspace = true
 malachitebft-test-framework.workspace = true
 
 bytesize.workspace = true
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 ractor.workspace = true
 rstest.workspace = true
 tempfile.workspace = true

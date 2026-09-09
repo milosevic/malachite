@@ -30,8 +30,11 @@ where
         connection_id: ConnectionId,
     ) {
         if !self.should_close(peer_id, connection_id) {
+            crate::oracle::close_connection(&peer_id, &connection_id, true);
             return;
         }
+
+        crate::oracle::close_connection(&peer_id, &connection_id, false);
 
         debug!("Closing connection {connection_id} to peer {peer_id}");
         // Close the connection even if it is not active
@@ -44,6 +47,10 @@ where
         peer_id: PeerId,
         connection_id: ConnectionId,
     ) {
+        // Logged on entry: the handler has no guard, and the cleanup below emits
+        // the nested rate-limiter / dial-history events that must follow it.
+        crate::oracle::handle_closed_connection(&peer_id, &connection_id);
+
         let was_last_connection = !swarm.is_connected(&peer_id);
 
         self.connections.remove(&connection_id);
@@ -139,6 +146,7 @@ where
 mod tests {
     use std::time::Duration;
 
+    use libp2p::core::ConnectedPoint;
     use libp2p::futures::StreamExt;
     use libp2p::kad::{Addresses, KBucketKey, KBucketRef, RoutingUpdate};
     use libp2p::request_response::{OutboundRequestId, ResponseChannel};
@@ -290,5 +298,91 @@ mod tests {
 
         assert_eq!(discovery.get_peer_id_for_addr(&bootstrap_addr), None);
         assert!(!discovery.connections.contains_key(&remaining_connection_id));
+    }
+
+    /// reproduces the violated property `rate_limit_admits_at_most_max_per_window`
+    /// — fails on current code.
+    ///
+    /// The limiter's stated guarantee is at most `max_requests_per_window`
+    /// peers requests served per peer per `rate_window` (6 per 60s by default,
+    /// `DiscoveryRateLimiter::default`). But `remove_peer` clears the peer's
+    /// request window while deliberately keeping its violations
+    /// (rate_limiter.rs:198-206), and `cleanup_peer_on_disconnect` calls it on
+    /// every last-connection close. So a peer that exhausts its budget, drops
+    /// the connection and immediately reconnects gets a fresh budget inside the
+    /// same 60-second window.
+    ///
+    /// Everything here runs under default production settings. The requests are
+    /// counted through `DiscoveryRateLimiter::check_request`, exactly the call
+    /// `check_rate_limit` makes (handlers/peers_request.rs:38) — the handler
+    /// itself needs a `ResponseChannel` only the swarm can mint — while the
+    /// window reset is driven through the real public entry point the swarm
+    /// calls on `SwarmEvent::ConnectionClosed`.
+    #[tokio::test]
+    #[ignore]
+    async fn rate_limit_window_survives_a_peer_reconnect() {
+        let mut swarm = build_swarm();
+        let mut registry = Registry::default();
+        let bootstrap_addr: Multiaddr = "/ip4/127.0.0.1/tcp/26000".parse().unwrap();
+        let mut discovery = Discovery::<dummy::Behaviour>::new(
+            Config::default(),
+            vec![bootstrap_addr],
+            &mut registry,
+        );
+
+        let peer_id = PeerId::random();
+        let peer_addr: Multiaddr = "/ip4/203.0.113.9/tcp/41337".parse().unwrap();
+        let max_per_window = discovery.rate_limiter.max_requests_per_window();
+
+        // The peer connects inbound.
+        let first_connection = ConnectionId::new_unchecked(1);
+        discovery.handle_connection(
+            &mut swarm,
+            peer_id,
+            first_connection,
+            ConnectedPoint::Listener {
+                local_addr: "/ip4/10.0.0.1/tcp/26656".parse().unwrap(),
+                send_back_addr: peer_addr.clone(),
+            },
+        );
+
+        // It spends its whole budget and is then rate limited.
+        let mut served = 0;
+        while discovery.rate_limiter.check_request(&peer_id).is_allowed() {
+            served += 1;
+            assert!(served <= max_per_window, "budget exceeded before the reconnect");
+        }
+        assert_eq!(served, max_per_window);
+
+        // It drops the connection: the swarm reports it closed, which is where
+        // discovery cleans up the peer's rate limiter state.
+        discovery.handle_closed_connection(&mut swarm, peer_id, first_connection);
+
+        // It reconnects at once and keeps asking, still well inside the window.
+        let second_connection = ConnectionId::new_unchecked(2);
+        discovery.handle_connection(
+            &mut swarm,
+            peer_id,
+            second_connection,
+            ConnectedPoint::Listener {
+                local_addr: "/ip4/10.0.0.1/tcp/26656".parse().unwrap(),
+                send_back_addr: peer_addr,
+            },
+        );
+
+        while discovery.rate_limiter.check_request(&peer_id).is_allowed() {
+            served += 1;
+            if served > max_per_window * 4 {
+                break;
+            }
+        }
+
+        assert!(
+            served <= max_per_window,
+            "{served} peers requests were served to {peer_id} within one {:?} window, \
+             but the limiter promises at most {max_per_window}: reconnecting clears \
+             the request window",
+            discovery.rate_limiter.rate_window()
+        );
     }
 }

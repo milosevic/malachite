@@ -23,6 +23,8 @@ mod handlers;
 use handlers::selection::selector::Selector;
 
 mod metrics;
+
+mod oracle;
 use metrics::Metrics;
 
 mod rate_limiter;
@@ -195,6 +197,11 @@ where
     /// Returns an iterator over inbound peer IDs.
     pub fn inbound_peer_ids(&self) -> impl Iterator<Item = &PeerId> {
         self.inbound_peers.iter()
+    }
+
+    /// The configured inbound-peer slot count.
+    pub fn num_inbound_peers(&self) -> usize {
+        self.config.num_inbound_peers
     }
 
     /// Returns true if there is room for additional inbound peers.

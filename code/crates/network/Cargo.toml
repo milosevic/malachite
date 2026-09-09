@@ -15,6 +15,7 @@ all-features = true
 workspace = true
 
 [dependencies]
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 malachitebft-discovery = { workspace = true }
 malachitebft-metrics = { workspace = true }
 malachitebft-peer = { workspace = true }

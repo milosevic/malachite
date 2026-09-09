@@ -57,6 +57,12 @@ where
 
     /// Peer scorer for scoring peers based on their performance.
     pub peer_scorer: PeerScorer,
+
+    /// Oracle-only: stable sequential identities for peers and outbound
+    /// requests. The real ids are random per run, so every logged observation
+    /// names the identity assigned on first sight instead.
+    oracle_peer_ids: BTreeMap<PeerId, i64>,
+    oracle_request_ids: BTreeMap<OutboundRequestId, i64>,
 }
 
 impl<Ctx> State<Ctx>
@@ -73,7 +79,7 @@ where
             Strategy::Ema => PeerScorer::new(ema::ExponentialMovingAverage::default()),
         };
 
-        Self {
+        let state = Self {
             rng,
             config,
             started: false,
@@ -83,7 +89,52 @@ where
             pending_requests: BTreeMap::new(),
             peers: BTreeMap::new(),
             peer_scorer,
+            oracle_peer_ids: BTreeMap::new(),
+            oracle_request_ids: BTreeMap::new(),
+        };
+
+        if quint_oracle::enabled() {
+            let parallel_requests = state.config.effective_parallel_requests() as i64;
+            let batch_size = state.config.effective_batch_size() as i64;
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "state_new")
+                .argument("parallel_requests", parallel_requests, Some("PARALLELS"))
+                .argument("batch_size", batch_size, Some("BATCHES"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("max_parallel"),
+                    ]),
+                    parallel_requests,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("batch_size"),
+                    ]),
+                    batch_size,
+                )
+                .scope("value-sync")
+                .send();
         }
+
+        state
+    }
+
+    /// Oracle-only: this peer's stable identity in the `PEER_IDS` domain,
+    /// assigned on first sight so every observation names the same peer.
+    pub fn oracle_peer(&mut self, peer: PeerId) -> i64 {
+        let next = self.oracle_peer_ids.len() as i64 + 1;
+        *self.oracle_peer_ids.entry(peer).or_insert(next)
+    }
+
+    /// Oracle-only: this request's stable identity in the `REQ_IDS` domain.
+    pub fn oracle_request(&mut self, request_id: &OutboundRequestId) -> i64 {
+        let next = self.oracle_request_ids.len() as i64 + 1;
+        *self
+            .oracle_request_ids
+            .entry(request_id.clone())
+            .or_insert(next)
     }
 
     /// The maximum number of parallel requests that can be made to peers.

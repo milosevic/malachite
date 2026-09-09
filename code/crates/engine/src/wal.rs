@@ -107,13 +107,15 @@ where
 
                 state.height = height;
 
-                self.started_height(state, height, reply_to).await?;
-
+                // Logged where the actor's own state moves — before the WAL
+                // thread's reset/replay, whose log-level events follow this one.
                 quint_oracle::log!(
                     Wal_actor_MsgStartedHeight,
                     height: (height.as_u64()) @ HEIGHTS,
                     [wal],
                 );
+
+                self.started_height(state, height, reply_to).await?;
             }
 
             Msg::Reset(height, reply_to) => {
@@ -289,6 +291,10 @@ where
         // otherwise the WAL actor would outlive its dead worker and stall
         // consensus silently.
         let handle = self::thread::spawn(self.span.clone(), log, args.codec, rx, args.node);
+
+        // A fresh actor starts at height ZERO whatever the log's sequence is —
+        // the transition that makes a restart's StartedHeight consult the log.
+        quint_oracle::log!(Wal_actor_pre_start, [wal],);
 
         Ok(State {
             height: Ctx::Height::ZERO,

@@ -8,7 +8,7 @@ use malachitebft_core_state_machine::output::Output as RoundOutput;
 use malachitebft_core_state_machine::state::{RoundValue, State as RoundState, Step};
 use malachitebft_core_state_machine::state_machine::Info;
 use malachitebft_core_types::{
-    Context, EnterRoundCertificate, ExtendedCommitCertificate, NilOrVal, PolkaCertificate,
+    Context, EnterRoundCertificate, ExtendedCommitCertificate, Height, NilOrVal, PolkaCertificate,
     PolkaSignature, Proposal, Round, RoundCertificate, RoundCertificateType, RoundSignature,
     SignedProposal, SignedVote, Threshold, Timeout, TimeoutKind, Validator, ValidatorSet, Validity,
     Value, ValueId, Vote, VoteType,
@@ -90,7 +90,7 @@ where
         let vote_keeper = VoteKeeper::new(validator_set.clone(), threshold_params);
         let round_state = RoundState::new(height, Round::Nil);
 
-        Self {
+        let driver = Self {
             ctx,
             address,
             threshold_params,
@@ -105,7 +105,35 @@ where
             last_prevote: None,
             last_precommit: None,
             round_certificate: None,
+        };
+
+        if quint_oracle::enabled() {
+            driver.oracle_log_new();
         }
+
+        driver
+    }
+
+    /// Quint oracle: report the constructed baseline. The whole validator set
+    /// travels as its three voting powers, so replay pins it at step 0.
+    fn oracle_log_new(&self) {
+        quint_oracle::Event::builder(quint_oracle::current_test(), "Drivernew")
+            .argument("height", self.height().as_u64() as i64, Some("HEIGHTS"))
+            .argument("w0", self.oracle_weight(0), Some("WEIGHTS"))
+            .argument("w1", self.oracle_weight(1), Some("WEIGHTS"))
+            .argument("w2", self.oracle_weight(2), Some("WEIGHTS"))
+            .argument("w3", self.oracle_weight(3), Some("WEIGHTS"))
+            .argument("address", self.oracle_addr(&self.address), Some("VSET"))
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("rs"), quint_oracle::PathSeg::ident("round")]),
+                self.round_state.round.as_i64(),
+            )
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("stepRankNow")]),
+                self.oracle_step_rank(),
+            )
+            .scope("driver")
+            .send();
     }
 
     /// Reset votes, round state, pending input and move to new height with the given validator set.
@@ -135,6 +163,25 @@ where
         self.pending_inputs = vec![];
         self.last_prevote = None;
         self.last_precommit = None;
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "move_to_height")
+                .argument("height", self.height().as_u64() as i64, Some("HEIGHTS"))
+                .argument("w0", self.oracle_weight(0), Some("WEIGHTS"))
+                .argument("w1", self.oracle_weight(1), Some("WEIGHTS"))
+                .argument("w2", self.oracle_weight(2), Some("WEIGHTS"))
+                .argument("w3", self.oracle_weight(3), Some("WEIGHTS"))
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("rs"), quint_oracle::PathSeg::ident("round")]),
+                    self.round_state.round.as_i64(),
+                )
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("stepRankNow")]),
+                    self.oracle_step_rank(),
+                )
+                .scope("driver")
+                .send();
+        }
     }
 
     /// Return the height of the consensus.
@@ -234,7 +281,19 @@ where
 
     /// Remove and return recorded evidence of proposal equivocation.
     pub fn take_proposal_evidence(&mut self) -> proposal_keeper::EvidenceMap<Ctx> {
-        self.proposal_keeper.take_evidence()
+        let evidence = self.proposal_keeper.take_evidence();
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "take_proposal_evidence")
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("rs"), quint_oracle::PathSeg::ident("round")]),
+                    self.round_state.round.as_i64(),
+                )
+                .scope("driver")
+                .send();
+        }
+
+        evidence
     }
 
     /// Record a pair of equivocating proposals as evidence in the proposal keeper.
@@ -251,7 +310,19 @@ where
 
     /// Remove and return recorded evidence of vote equivocation.
     pub fn take_vote_evidence(&mut self) -> malachitebft_core_votekeeper::EvidenceMap<Ctx> {
-        self.vote_keeper.take_evidence()
+        let evidence = self.vote_keeper.take_evidence();
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "take_vote_evidence")
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("rs"), quint_oracle::PathSeg::ident("round")]),
+                    self.round_state.round.as_i64(),
+                )
+                .scope("driver")
+                .send();
+        }
+
+        evidence
     }
 
     /// Return the proposer for the current round.
@@ -355,6 +426,55 @@ where
             .get_proposals_and_validities_for_round(round)
     }
 
+    /// Quint oracle: render an address as its index in the validator set
+    /// ("a", "b", ... ; "e" when it is not a member at all), the way the
+    /// `driver` spec names validators.
+    fn oracle_addr(&self, address: &Ctx::Address) -> &'static str {
+        let idx = (0..self.validator_set.count()).find(|i| {
+            self.validator_set
+                .get_by_index(*i)
+                .is_some_and(|v| v.address() == address)
+        });
+        match idx {
+            Some(0) => "a",
+            Some(1) => "b",
+            Some(2) => "c",
+            Some(3) => "d",
+            _ => "e",
+        }
+    }
+
+    /// Quint oracle: the voting power of the validator at the given index, or 0.
+    fn oracle_weight(&self, index: usize) -> i64 {
+        self.validator_set
+            .get_by_index(index)
+            .map_or(0, |v| v.voting_power() as i64)
+    }
+
+    /// Quint oracle: the `Error` variant name the spec's `lastError` records.
+    fn oracle_error_name(err: &Error<Ctx>) -> &'static str {
+        match err {
+            Error::NoProposer(_, _) => "NoProposer",
+            Error::ProposerNotFound(_) => "ProposerNotFound",
+            Error::ValidatorNotFound(_) => "ValidatorNotFound",
+            Error::InvalidProposalHeight { .. } => "InvalidProposalHeight",
+            Error::InvalidVoteHeight { .. } => "InvalidVoteHeight",
+            Error::InvalidCertificateHeight { .. } => "InvalidCertificateHeight",
+            Error::CertificateNotFound { .. } => "CertificateNotFound",
+        }
+    }
+
+    /// Quint oracle: the rank of the current step, as the spec's `stepRank`.
+    fn oracle_step_rank(&self) -> i64 {
+        match self.round_state.step {
+            Step::Unstarted => 0,
+            Step::Propose => 1,
+            Step::Prevote => 2,
+            Step::Precommit => 3,
+            Step::Commit => 4,
+        }
+    }
+
     /// Store the last vote that we have cast
     fn set_last_vote_cast(&mut self, vote: &Ctx::Vote) {
         assert_eq!(vote.height(), self.height());
@@ -369,6 +489,150 @@ where
 
     /// Process the given input, returning the outputs to be broadcast to the network.
     pub fn process(&mut self, msg: Input<Ctx>) -> Result<Vec<Output<Ctx>>, Error<Ctx>> {
+        if !quint_oracle::enabled() {
+            return self.process_inner(msg);
+        }
+
+        // Quint oracle: the input as the `driver` spec's `process` picks it —
+        // the variant tag plus the primitive fields that variant carries. A
+        // field the variant does not carry is pinned to the value the spec's
+        // own domain for that tag holds, so replay never searches it.
+        let (tag, height, round, value, pol_round, addr, validity, vote_type, kind) = match &msg {
+            Input::NewRound(h, r, p) => (
+                "NewRound",
+                h.as_u64() as i64,
+                r.as_i64(),
+                alloc::string::String::from("v"),
+                -1i64,
+                self.oracle_addr(p),
+                true,
+                "Prevote",
+                "Propose",
+            ),
+            Input::ProposeValue(r, v) => (
+                "ProposeValue",
+                1,
+                r.as_i64(),
+                alloc::format!("{}", v.id()),
+                -1,
+                "a",
+                true,
+                "Prevote",
+                "Propose",
+            ),
+            Input::Proposal(p, validity) => (
+                "Proposal",
+                p.height().as_u64() as i64,
+                p.round().as_i64(),
+                alloc::format!("{}", p.value().id()),
+                p.pol_round().as_i64(),
+                self.oracle_addr(p.validator_address()),
+                validity.is_valid(),
+                "Prevote",
+                "Propose",
+            ),
+            Input::Vote(v) => (
+                "Vote",
+                v.height().as_u64() as i64,
+                v.round().as_i64(),
+                match v.value() {
+                    NilOrVal::Nil => alloc::string::String::from("Nil"),
+                    NilOrVal::Val(id) => alloc::format!("{id}"),
+                },
+                -1,
+                self.oracle_addr(v.validator_address()),
+                true,
+                match v.vote_type() {
+                    VoteType::Prevote => "Prevote",
+                    VoteType::Precommit => "Precommit",
+                },
+                "Propose",
+            ),
+            Input::CommitCertificate(c) => (
+                "CommitCertificate",
+                c.height.as_u64() as i64,
+                c.round.as_i64(),
+                alloc::format!("{}", c.value_id),
+                -1,
+                "a",
+                true,
+                "Prevote",
+                "Propose",
+            ),
+            Input::PolkaCertificate(c) => (
+                "PolkaCertificate",
+                c.height.as_u64() as i64,
+                c.round.as_i64(),
+                alloc::format!("{}", c.value_id),
+                -1,
+                "a",
+                true,
+                "Prevote",
+                "Propose",
+            ),
+            Input::TimeoutElapsed(t) => (
+                "TimeoutElapsed",
+                1,
+                t.round.as_i64(),
+                alloc::string::String::from("v"),
+                -1,
+                "a",
+                true,
+                "Prevote",
+                match t.kind {
+                    TimeoutKind::Propose => "Propose",
+                    TimeoutKind::Prevote => "Prevote",
+                    TimeoutKind::Precommit => "Precommit",
+                    _ => "Rebroadcast",
+                },
+            ),
+            Input::SyncDecision(p) => (
+                "SyncDecision",
+                p.height().as_u64() as i64,
+                p.round().as_i64(),
+                alloc::format!("{}", p.value().id()),
+                p.pol_round().as_i64(),
+                self.oracle_addr(p.validator_address()),
+                true,
+                "Prevote",
+                "Propose",
+            ),
+        };
+
+        let result = self.process_inner(msg);
+
+        let (error_name, output_count) = match &result {
+            Ok(outputs) => ("", outputs.len() as i64),
+            Err(err) => (Self::oracle_error_name(err), 0),
+        };
+
+        quint_oracle::Event::builder(quint_oracle::current_test(), "process")
+            .argument("itag", tag, Some("INPUT_TAGS"))
+            .argument("ih", height, Some("HEIGHTS"))
+            .argument("iround", round, Some("ROUND_BAND"))
+            .argument("ivalue", value.as_str(), Some("VOTE_VALUES"))
+            .argument("ipol", pol_round, Some("POL_ROUNDS"))
+            .argument("iaddr", addr, Some("VOTERS"))
+            .argument("ivalid", validity, None)
+            .argument("ivt", vote_type, Some("VOTE_TYPES"))
+            .argument("ikind", kind, Some("TIMEOUT_KINDS"))
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("rs"), quint_oracle::PathSeg::ident("round")]),
+                self.round_state.round.as_i64(),
+            )
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("stepRankNow")]),
+                self.oracle_step_rank(),
+            )
+            .assert(Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("lastError")]), error_name)
+            .assert(Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("outputCount")]), output_count)
+            .scope("driver")
+            .send();
+
+        result
+    }
+
+    fn process_inner(&mut self, msg: Input<Ctx>) -> Result<Vec<Output<Ctx>>, Error<Ctx>> {
         let round_output = match self.apply(msg)? {
             Some(msg) => msg,
             None => return Ok(Vec::new()),
@@ -660,6 +924,20 @@ where
     pub fn prune_votes_and_certificates(&mut self, min_round: Round) {
         self.prune_polka_certificates(min_round);
         self.vote_keeper.prune_votes(min_round);
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "prune_votes_and_certificates",
+            )
+            .argument("min_round", min_round.as_i64(), Some("ROUND_BAND"))
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("rs"), quint_oracle::PathSeg::ident("round")]),
+                self.round_state.round.as_i64(),
+            )
+            .scope("driver")
+            .send();
+        }
     }
 
     /// Prunes all polka certificates from rounds less than `min_round`.

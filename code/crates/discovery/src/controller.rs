@@ -141,6 +141,8 @@ impl Controller {
     /// Only use `register_addrs = true` for trusted addresses (bootstrap nodes).
     /// For discovered peers, use `register_addrs = false` to prevent address poisoning attacks.
     pub(crate) fn dial_register_done_on(&mut self, dial_data: &DialData, register_addrs: bool) {
+        crate::oracle::dial_register_done_on(dial_data, register_addrs);
+
         if let Some(peer_id) = dial_data.peer_id() {
             self.dial.register_done_on(PeerData::PeerId(peer_id));
         }
@@ -163,6 +165,8 @@ impl Controller {
     }
 
     pub(crate) fn dial_clear_done_for_peer(&mut self, peer_id: PeerId, listen_addrs: &[Multiaddr]) {
+        crate::oracle::dial_clear_done_for_peer(&peer_id, listen_addrs);
+
         // Clear dial history for this peer ID
         self.dial.remove_done_on(&PeerData::PeerId(peer_id));
 

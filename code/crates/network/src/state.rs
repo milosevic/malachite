@@ -1,5 +1,9 @@
 //! Network state management
 
+// Quint Studio oracle: value rendering for the instrumentation below.
+#[allow(unused_imports)]
+use quint_oracle::ToLogged as _;
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -163,6 +167,10 @@ pub struct State {
     pub(crate) enable_explicit_peering: bool,
     /// Detailed peer information indexed by PeerId
     pub peer_info: HashMap<libp2p::PeerId, PeerInfo>,
+    /// Quint oracle: set while a modeled operation runs another one internally,
+    /// so the nested call does not log a second transition the spec folds into
+    /// the outer one. Observational only.
+    quint_nested: bool,
     /// Pending verified proofs for peers not yet in peer_info (Identify not received yet).
     ///
     /// rust-libp2p does not guarantee Identify runs before other protocols:
@@ -194,7 +202,46 @@ impl State {
         self.reclassify_local_node();
 
         // Reclassify peers based on stored proofs against new validator set
-        self.reclassify_peers()
+        let changed = self.reclassify_peers();
+
+        if quint_oracle::enabled() {
+            let node = crate::quint_ids::node(&self.local_node.peer_id);
+            let validators: std::collections::BTreeSet<quint_oracle::Value> = self
+                .validator_set
+                .iter()
+                .map(|v| {
+                    quint_oracle::record([
+                        (
+                            "address",
+                            crate::quint_ids::cons_addr(&v.address, Some(&v.public_key))
+                                .to_logged(),
+                        ),
+                        (
+                            "publicKey",
+                            crate::quint_ids::public_key(&v.public_key).to_logged(),
+                        ),
+                    ])
+                })
+                .collect();
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "Stateprocess_validator_set_update",
+            )
+            .argument("node", node.as_str(), Some("NODES"))
+            .argument("new_validators", validators, Some("VALIDATOR_SETS"))
+            .assert(
+                vec![
+                    quint_oracle::PathSeg::ident("nodes"),
+                    quint_oracle::PathSeg::value(node.as_str()),
+                    quint_oracle::PathSeg::ident("localIsValidator"),
+                ],
+                self.local_node.is_validator,
+            )
+            .scope("p2p-network")
+            .send();
+        }
+
+        changed
     }
 
     /// Re-classify the local node based on the current validator set.
@@ -290,6 +337,29 @@ impl State {
             // Peer not in peer_info yet (Identify not received).
             // Buffer the proof to apply when Identify completes.
             self.pending_verified_proofs.insert(*peer_id, public_key);
+            if quint_oracle::enabled() && !self.quint_nested {
+                let node = crate::quint_ids::node(&self.local_node.peer_id);
+                let peer = crate::quint_ids::peer(peer_id);
+                let key = crate::quint_ids::public_key(&self.pending_verified_proofs[peer_id]);
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "Staterecord_verified_proof",
+                )
+                .argument("node", node.as_str(), Some("NODES"))
+                .argument("peer_id", peer.as_str(), Some("PEERS"))
+                .argument("public_key", key.as_str(), Some("KEYS"))
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("nodes"),
+                        quint_oracle::PathSeg::value(node.as_str()),
+                        quint_oracle::PathSeg::ident("pendingProofs"),
+                        quint_oracle::PathSeg::value(peer.as_str()),
+                    ],
+                    key.as_str().to_logged(),
+                )
+                .scope("p2p-network")
+                .send();
+            }
             return None;
         };
 
@@ -309,18 +379,43 @@ impl State {
         let old_peer_info = peer_info.clone();
 
         // Store the public key from the verified proof
+        let logged_key = crate::quint_ids::public_key(&public_key);
         peer_info.consensus_public_key = Some(public_key);
 
         // Set consensus_address only if in validator set (for display/metrics)
         peer_info.consensus_address = validator_address.map(|s| s.to_string());
 
-        apply_peer_type_change(
+        let score = apply_peer_type_change(
             peer_id,
             peer_info,
             &old_peer_info,
             new_type,
             &mut self.metrics,
-        )
+        );
+
+        if quint_oracle::enabled() && !self.quint_nested {
+            let node = crate::quint_ids::node(&self.local_node.peer_id);
+            let peer = crate::quint_ids::peer(peer_id);
+            let is_validator = self.peer_info[peer_id].peer_type.is_validator();
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Staterecord_verified_proof")
+                .argument("node", node.as_str(), Some("NODES"))
+                .argument("peer_id", peer.as_str(), Some("PEERS"))
+                .argument("public_key", logged_key.as_str(), Some("KEYS"))
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("nodes"),
+                        quint_oracle::PathSeg::value(node.as_str()),
+                        quint_oracle::PathSeg::ident("peers"),
+                        quint_oracle::PathSeg::value(peer.as_str()),
+                        quint_oracle::PathSeg::ident("isValidator"),
+                    ],
+                    is_validator,
+                )
+                .scope("p2p-network")
+                .send();
+        }
+
+        score
     }
 
     pub(crate) fn new(
@@ -346,6 +441,7 @@ impl State {
             local_node,
             enable_explicit_peering,
             peer_info: HashMap::new(),
+            quint_nested: false,
             pending_verified_proofs: HashMap::new(),
         }
     }
@@ -442,6 +538,7 @@ impl State {
             peer_info.score = new_score;
             peer_info.topics = new_topics;
         }
+
     }
 
     /// Update the peer information after Identify completes and compute peer score.
@@ -510,7 +607,51 @@ impl State {
 
             self.metrics
                 .update_peer_labels(&peer_id, &old_peer_info, existing);
-            return existing.score;
+            let score = existing.score;
+            if quint_oracle::enabled() {
+                let node = crate::quint_ids::node(&self.local_node.peer_id);
+                let peer = crate::quint_ids::peer(&peer_id);
+                let listen: Vec<quint_oracle::Value> =
+                    info.listen_addrs
+                        .iter()
+                        .take(1)
+                        .map(|a| crate::quint_ids::addr(a))
+                        .collect();
+                let peer_addr = &self.peer_info[&peer_id].address;
+                let recorded = crate::quint_ids::addr(peer_addr);
+                quint_oracle::Event::builder(quint_oracle::current_test(), "Stateupdate_peer")
+                    .argument("node", node.as_str(), Some("NODES"))
+                    .argument("peer_id", peer.as_str(), Some("PEERS"))
+                    .argument(
+                        "connection_id",
+                        crate::quint_ids::conn(connection_id),
+                        Some("CONN_IDS"),
+                    )
+                    .argument("listen_addrs", listen, Some("LISTEN_ADDR_LISTS"))
+                    .assert(
+                        vec![
+                            quint_oracle::PathSeg::ident("nodes"),
+                            quint_oracle::PathSeg::value(node.as_str()),
+                            quint_oracle::PathSeg::ident("peers"),
+                            quint_oracle::PathSeg::value(peer.as_str()),
+                            quint_oracle::PathSeg::ident("isPersistent"),
+                        ],
+                        is_persistent,
+                    )
+                    .assert(
+                        vec![
+                            quint_oracle::PathSeg::ident("nodes"),
+                            quint_oracle::PathSeg::value(node.as_str()),
+                            quint_oracle::PathSeg::ident("peers"),
+                            quint_oracle::PathSeg::value(peer.as_str()),
+                            quint_oracle::PathSeg::ident("address"),
+                        ],
+                        recorded,
+                    )
+                    .scope("p2p-network")
+                    .send();
+            }
+            return score;
         }
 
         // New peer - create entry (validator status starts as false, set by proof protocol)
@@ -537,9 +678,57 @@ impl State {
         // Check for pending verified proof (proof verification completed before Identify).
         // If found, apply it now that PeerInfo exists.
         if let Some(public_key) = self.pending_verified_proofs.remove(&peer_id) {
-            if let Some(new_score) = self.record_verified_proof(&peer_id, public_key) {
+            // The spec folds this into `update_peer`; do not log it separately.
+            self.quint_nested = true;
+            let applied = self.record_verified_proof(&peer_id, public_key);
+            self.quint_nested = false;
+            if let Some(new_score) = applied {
                 score = new_score;
             }
+        }
+
+        if quint_oracle::enabled() {
+            let node = crate::quint_ids::node(&self.local_node.peer_id);
+            let peer = crate::quint_ids::peer(&peer_id);
+            let listen: Vec<quint_oracle::Value> =
+                info.listen_addrs
+                    .iter()
+                    .take(1)
+                    .map(|a| crate::quint_ids::addr(a))
+                    .collect();
+            let peer_addr = &self.peer_info[&peer_id].address;
+            let recorded = crate::quint_ids::addr(peer_addr);
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Stateupdate_peer")
+                .argument("node", node.as_str(), Some("NODES"))
+                .argument("peer_id", peer.as_str(), Some("PEERS"))
+                .argument(
+                    "connection_id",
+                    crate::quint_ids::conn(connection_id),
+                    Some("CONN_IDS"),
+                )
+                .argument("listen_addrs", listen, Some("LISTEN_ADDR_LISTS"))
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("nodes"),
+                        quint_oracle::PathSeg::value(node.as_str()),
+                        quint_oracle::PathSeg::ident("peers"),
+                        quint_oracle::PathSeg::value(peer.as_str()),
+                        quint_oracle::PathSeg::ident("isPersistent"),
+                    ],
+                    is_persistent,
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("nodes"),
+                        quint_oracle::PathSeg::value(node.as_str()),
+                        quint_oracle::PathSeg::ident("peers"),
+                        quint_oracle::PathSeg::value(peer.as_str()),
+                        quint_oracle::PathSeg::ident("address"),
+                    ],
+                    recorded,
+                )
+                .scope("p2p-network")
+                .send();
         }
 
         score
@@ -667,6 +856,16 @@ impl State {
     ) -> Result<(), PersistentPeerError> {
         // Check if already exists
         if self.persistent_peer_addrs.contains(&addr) {
+            if quint_oracle::enabled() {
+            let node = crate::quint_ids::node(&self.local_node.peer_id);
+            let logged_addr = crate::quint_ids::addr(&addr);
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Stateadd_persistent_peer")
+                .argument("node", node.as_str(), Some("NODES"))
+                .argument("addr", logged_addr, Some("ADDRS"))
+                .argument("outcome", "rejected", None)
+                .scope("p2p-network")
+                .send();
+        }
             return Err(PersistentPeerError::AlreadyExists);
         }
 
@@ -682,8 +881,11 @@ impl State {
                 swarm,
             );
 
-            // Promote from ephemeral if already connected
+            // Promote from ephemeral if already connected.
+            // The spec folds this into `add_persistent_peer`; do not log it twice.
+            self.quint_nested = true;
             self.try_prioritize_peer(peer_id);
+            self.quint_nested = false;
 
             // For a peer that is already connected, add it to the gossipsub
             // explicit-peer set now. For one not yet connected, this is a
@@ -710,6 +912,29 @@ impl State {
             }
         }
 
+        if quint_oracle::enabled() {
+            let node = crate::quint_ids::node(&self.local_node.peer_id);
+            let logged_addr = crate::quint_ids::addr(&addr);
+            let configured: Vec<quint_oracle::Value> = self
+                .persistent_peer_addrs
+                .iter()
+                .map(|a| crate::quint_ids::addr(a))
+                .collect();
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Stateadd_persistent_peer")
+                .argument("node", node.as_str(), Some("NODES"))
+                .argument("addr", logged_addr, Some("ADDRS"))
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("nodes"),
+                        quint_oracle::PathSeg::value(node.as_str()),
+                        quint_oracle::PathSeg::ident("persistentPeerAddrs"),
+                    ],
+                    configured,
+                )
+                .scope("p2p-network")
+                .send();
+        }
+
         Ok(())
     }
 
@@ -721,6 +946,16 @@ impl State {
     ) -> Result<(), PersistentPeerError> {
         // Check if exists and remove from persistent peer list
         let Some(pos) = self.persistent_peer_addrs.iter().position(|a| a == &addr) else {
+            if quint_oracle::enabled() {
+            let node = crate::quint_ids::node(&self.local_node.peer_id);
+            let logged_addr = crate::quint_ids::addr(&addr);
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Stateremove_persistent_peer")
+                .argument("node", node.as_str(), Some("NODES"))
+                .argument("addr", logged_addr, Some("ADDRS"))
+                .argument("outcome", "rejected", None)
+                .scope("p2p-network")
+                .send();
+        }
             return Err(PersistentPeerError::NotFound);
         };
 
@@ -765,6 +1000,29 @@ impl State {
         // Update discovery layer
         self.discovery.remove_bootstrap_node(&addr);
 
+        if quint_oracle::enabled() {
+            let node = crate::quint_ids::node(&self.local_node.peer_id);
+            let logged_addr = crate::quint_ids::addr(&addr);
+            let configured: Vec<quint_oracle::Value> = self
+                .persistent_peer_addrs
+                .iter()
+                .map(|a| crate::quint_ids::addr(a))
+                .collect();
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Stateremove_persistent_peer")
+                .argument("node", node.as_str(), Some("NODES"))
+                .argument("addr", logged_addr, Some("ADDRS"))
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("nodes"),
+                        quint_oracle::PathSeg::value(node.as_str()),
+                        quint_oracle::PathSeg::ident("persistentPeerAddrs"),
+                    ],
+                    configured,
+                )
+                .scope("p2p-network")
+                .send();
+        }
+
         Ok(())
     }
 
@@ -782,22 +1040,78 @@ impl State {
         &mut self,
         peer_id: libp2p::PeerId,
     ) -> Option<libp2p::PeerId> {
-        let peer_info = self.peer_info.get(&peer_id)?;
+        let Some(peer_info) = self.peer_info.get(&peer_id) else {
+            if quint_oracle::enabled() && !self.quint_nested {
+                let node = crate::quint_ids::node(&self.local_node.peer_id);
+                let peer = crate::quint_ids::peer(&peer_id);
+                // No post-state assertion on `directions`: the spec models connection
+                // direction as environment-supplied, and discovery classifies peers as
+                // inbound on paths of its own (identify.rs:291, connect_request.rs:80)
+                // that this component neither calls nor observes.
+                quint_oracle::Event::builder(quint_oracle::current_test(), "Statetry_prioritize_peer")
+                    .argument("node", node.as_str(), Some("NODES"))
+                    .argument("peer_id", peer.as_str(), Some("PEERS"))
+                    .scope("p2p-network")
+                    .send();
+            }
+            return None;
+        };
 
         // Only prioritize validators and persistent peers
         if !peer_info.peer_type.is_validator() && !peer_info.peer_type.is_persistent() {
+            if quint_oracle::enabled() && !self.quint_nested {
+                let node = crate::quint_ids::node(&self.local_node.peer_id);
+                let peer = crate::quint_ids::peer(&peer_id);
+                // No post-state assertion on `directions`: the spec models connection
+                // direction as environment-supplied, and discovery classifies peers as
+                // inbound on paths of its own (identify.rs:291, connect_request.rs:80)
+                // that this component neither calls nor observes.
+                quint_oracle::Event::builder(quint_oracle::current_test(), "Statetry_prioritize_peer")
+                    .argument("node", node.as_str(), Some("NODES"))
+                    .argument("peer_id", peer.as_str(), Some("PEERS"))
+                    .scope("p2p-network")
+                    .send();
+            }
             return None;
         }
 
         // Must be ephemeral — check before eviction to avoid evicting
         // someone when the target peer is already inbound/outbound.
         if !self.discovery.is_ephemeral_peer(&peer_id) {
+            if quint_oracle::enabled() && !self.quint_nested {
+                let node = crate::quint_ids::node(&self.local_node.peer_id);
+                let peer = crate::quint_ids::peer(&peer_id);
+                // No post-state assertion on `directions`: the spec models connection
+                // direction as environment-supplied, and discovery classifies peers as
+                // inbound on paths of its own (identify.rs:291, connect_request.rs:80)
+                // that this component neither calls nor observes.
+                quint_oracle::Event::builder(quint_oracle::current_test(), "Statetry_prioritize_peer")
+                    .argument("node", node.as_str(), Some("NODES"))
+                    .argument("peer_id", peer.as_str(), Some("PEERS"))
+                    .scope("p2p-network")
+                    .send();
+            }
             return None;
         }
 
         // Evict lowest-value peer if inbound is full
         let evicted = if !self.discovery.has_inbound_capacity() {
-            let evict_id = self.find_lowest_priority_inbound_peer()?;
+            let Some(evict_id) = self.find_lowest_priority_inbound_peer() else {
+                if quint_oracle::enabled() && !self.quint_nested {
+                    let node = crate::quint_ids::node(&self.local_node.peer_id);
+                    let peer = crate::quint_ids::peer(&peer_id);
+                    // No post-state assertion on `directions`: the spec models connection
+                    // direction as environment-supplied, and discovery classifies peers as
+                    // inbound on paths of its own (identify.rs:291, connect_request.rs:80)
+                    // that this component neither calls nor observes.
+                    quint_oracle::Event::builder(quint_oracle::current_test(), "Statetry_prioritize_peer")
+                        .argument("node", node.as_str(), Some("NODES"))
+                        .argument("peer_id", peer.as_str(), Some("PEERS"))
+                        .scope("p2p-network")
+                        .send();
+                }
+                return None;
+            };
             tracing::info!(
                 %peer_id,
                 evicted = %evict_id,
@@ -819,6 +1133,20 @@ impl State {
                 peer_type = self.peer_info[&peer_id].peer_type.primary_type_str(),
                 "Promoted high-value peer to inbound"
             );
+        }
+
+        if quint_oracle::enabled() && !self.quint_nested {
+            let node = crate::quint_ids::node(&self.local_node.peer_id);
+            let peer = crate::quint_ids::peer(&peer_id);
+            // No post-state assertion on `directions`: the spec models connection
+            // direction as environment-supplied, and discovery classifies peers as
+            // inbound on paths of its own (identify.rs:291, connect_request.rs:80)
+            // that this component neither calls nor observes.
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Statetry_prioritize_peer")
+                .argument("node", node.as_str(), Some("NODES"))
+                .argument("peer_id", peer.as_str(), Some("PEERS"))
+                .scope("p2p-network")
+                .send();
         }
 
         evicted

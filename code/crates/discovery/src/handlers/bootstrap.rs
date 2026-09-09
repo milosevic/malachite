@@ -28,6 +28,8 @@ where
                     self.config.num_outbound_peers
                 );
 
+                crate::oracle::handle_successful_bootstrap();
+
                 self.initiate_extension_with_target(swarm, self.config.num_outbound_peers);
             } else {
                 info!(
@@ -36,6 +38,8 @@ where
                     self.config.num_outbound_peers,
                     self.metrics.elapsed().as_millis()
                 );
+
+                crate::oracle::handle_successful_bootstrap();
 
                 self.adjust_peers(swarm);
 
@@ -46,6 +50,8 @@ where
 
     pub(crate) fn handle_failed_bootstrap(&mut self) {
         if self.state == State::Bootstrapping {
+            crate::oracle::handle_failed_bootstrap();
+
             self.state = State::Idle;
         }
     }

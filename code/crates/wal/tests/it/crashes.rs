@@ -287,6 +287,7 @@ fn wal_write_test() {
     }
 }
 
+#[quint_oracle::test]
 #[test]
 fn concurrent_crash_recovery() -> io::Result<()> {
     let path = testwal!();

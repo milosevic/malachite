@@ -798,3 +798,50 @@ fn unknown_vote_discarded_then_skip_round_suppressed_then_polka_any() {
     let vote = new_signed_prevote(height, round1, NilOrVal::Val(ValueId::new(2)), addr2);
     assert_eq!(keeper.apply_vote(vote, round1), Some(Output::PolkaAny));
 }
+
+/// reproduces polka_any_reported_on_prevote_quorum — fails on current code.
+///
+/// A node still in round 0 receives prevotes for round 1 from peers that have
+/// already moved on (an ordinary occurrence: the local node is simply behind).
+/// Once f+1 of the voting power has voted in that future round, `apply_vote`
+/// returns `SkipRound(1)` for every subsequent vote, so when the prevote quorum
+/// for round 1 is actually reached the keeper never emits `PolkaAny` for it —
+/// `is_threshold_met(round 1, Prevote, Any)` is true while round 1's emitted
+/// outputs hold only `SkipRound`.
+#[test]
+#[ignore]
+fn polka_any_emitted_when_prevote_quorum_reached_in_future_round() {
+    let ([addr1, addr2, addr3, addr4], mut keeper) = setup([1, 1, 1, 1]);
+    let _ = addr4;
+
+    let height = Height::new(1);
+    let current_round = Round::new(0);
+    let future_round = Round::new(1);
+
+    // Three of four validators prevote in round 1, each for a different value:
+    // no single value reaches a quorum, but their combined weight does.
+    for (i, addr) in [addr1, addr2, addr3].into_iter().enumerate() {
+        let vote = new_signed_prevote(
+            height,
+            future_round,
+            NilOrVal::Val(ValueId::new(i as u64)),
+            addr,
+        );
+        keeper.apply_vote(vote, current_round);
+    }
+
+    assert!(
+        keeper.is_threshold_met(&future_round, VoteType::Prevote, Threshold::Any),
+        "the prevote quorum for round 1 must be met"
+    );
+
+    let emitted = keeper
+        .per_round(future_round)
+        .expect("round 1 must be tracked")
+        .emitted_outputs();
+
+    assert!(
+        emitted.contains(&Output::PolkaAny),
+        "prevote quorum reached in round 1 but PolkaAny was never emitted; emitted: {emitted:?}"
+    );
+}

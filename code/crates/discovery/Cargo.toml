@@ -10,6 +10,9 @@ readme = "../../../README.md"
 
 [features]
 test-utils = []
+# Quint Studio oracle instrumentation. Off by default: without it neither the
+# oracle client nor any of the `crate::oracle` helpers are compiled.
+quint-oracle-enabled = ["dep:quint-oracle", "quint-oracle/enabled"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -26,3 +29,4 @@ tokio = { workspace = true }
 either = { workspace = true }
 rand = { workspace = true }
 eyre = {workspace = true}
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust", optional = true }

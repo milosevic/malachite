@@ -1,8 +1,8 @@
 use futures::executor::block_on;
 use malachitebft_core_state_machine::state::State;
 use malachitebft_core_types::{
-    CommitCertificate, Context, NilOrVal, Round, RoundCertificateType, ThresholdParams, Validity,
-    VoteType,
+    CommitCertificate, Context, NilOrVal, Round, RoundCertificateType, ThresholdParams,
+    TimeoutKind, Validity, VoteType,
 };
 use malachitebft_signing::{Signer, VerifierExt};
 
@@ -14,6 +14,7 @@ use arc_malachitebft_core_driver::{Driver, Input, Output};
 use malachitebft_core_state_machine::state::Step;
 use malachitebft_core_state_machine::state_machine::{self, Info};
 use malachitebft_core_state_machine::input::Input as RoundInput;
+use malachitebft_core_state_machine::output::Output as RoundOutput;
 
 use crate::utils::*;
 
@@ -5081,14 +5082,12 @@ fn driver_steps_polka_previous_locked_on_other_value_at_lower_round_l30() {
 // L18: only the proposer for the round may emit a Proposal.
 //
 // We (v3) are not the proposer for round 0 (v1 is). Feeding `ProposeValue` anyway must not
-// produce a `Output::Propose` signed by us; the state machine catches the caller bug with
-// `debug_assert!(info.is_proposer())` and aborts instead.
+// produce a `Output::Propose` signed by us.
 //
-// NOTE: this only holds where debug assertions are enabled; in a release build the guard is
-// stripped and a non-proposer would emit a proposal.
+// The arm guards on `info.is_proposer()`, so the input falls through to the catch-all invalid
+// transition: no output, no state change, in every build profile.
 #[test]
-#[should_panic(expected = "info.is_proposer()")]
-fn driver_propose_value_when_not_proposer_panics() {
+fn driver_propose_value_when_not_proposer_is_invalid() {
     let value = Value::new(9999);
 
     let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
@@ -5117,7 +5116,20 @@ fn driver_propose_value_when_not_proposer_panics() {
         },
     ];
 
-    run_steps(&mut driver, steps)
+    run_steps(&mut driver, steps);
+
+    // Same thing directly at the state machine: the transition is rejected, not merely silent.
+    let ctx = TestContext::new();
+    let info = Info::new(Round::new(0), &my_addr, &v1.address);
+    let transition = state_machine::apply(
+        &ctx,
+        propose_state(Round::new(0)),
+        &info,
+        RoundInput::ProposeValue(value),
+    );
+
+    assert!(!transition.valid, "non-proposer ProposeValue must be invalid");
+    assert!(transition.output.is_none(), "no proposal may be emitted");
 }
 
 // L28: a `ProposalAndPolkaPrevious` whose proposal names a round other than the one we are at
@@ -5365,5 +5377,236 @@ fn driver_stale_new_round_neither_rewinds_nor_rearms_the_propose_timeout() {
     assert!(
         !outputs.contains(&start_propose_timer_output(Round::new(0))),
         "the propose timeout for round 0 must not be armed a second time: {outputs:?}"
+    );
+}
+
+// L18 at the very first round, followed by an input that matches no arm, followed by a
+// first-time precommit-timeout check.
+//
+// We are the proposer and hold no valid value, so `NewRound` asks the application for one and
+// arms the propose timeout (L18). A `TimeoutPrevote` then arrives while we are still in Propose:
+// it belongs to no arm of the transition table and must be rejected without touching the state.
+// The precommit timeout has not been armed for this round yet, so `check_timeout` grants it.
+#[test]
+fn state_machine_get_value_then_stray_prevote_timeout_then_precommit_timeout_granted() {
+    let [(_v1, _sk1), (_v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let ctx = TestContext::new();
+
+    // Fresh state for height 1, before any round has been entered.
+    let state: State<TestContext> = new_round(Round::Nil);
+
+    // We are the proposer for this round.
+    let info = Info::new(Round::Nil, &my_addr, &my_addr);
+
+    // L18: no valid value, so we ask the application to build one and arm the propose timeout.
+    let transition = state_machine::apply(&ctx, state, &info, RoundInput::NewRound(Round::Nil));
+
+    assert!(transition.valid);
+    assert_eq!(transition.next_state.step, Step::Propose);
+    assert_eq!(
+        transition.output,
+        Some(RoundOutput::get_value_and_schedule_timeout(
+            Height::new(1),
+            Round::Nil,
+            TimeoutKind::Propose
+        ))
+    );
+
+    // A prevote timeout while we are still in Propose matches no arm of the table.
+    let transition = state_machine::apply(
+        &ctx,
+        transition.next_state,
+        &info,
+        RoundInput::TimeoutPrevote,
+    );
+
+    assert!(
+        !transition.valid,
+        "a prevote timeout in the Propose step is not a transition"
+    );
+    assert_eq!(transition.output, None);
+    assert_eq!(transition.next_state.step, Step::Propose);
+
+    // The precommit timeout has not been armed for this round, so the check grants it.
+    let mut state = transition.next_state;
+    assert!(
+        state.check_timeout(TimeoutKind::Precommit),
+        "the precommit timeout was never armed in this round, so it must be granted"
+    );
+}
+
+// Pins `decision_is_never_overwritten`: once a value is decided, a later commit for a
+// DIFFERENT value in the same height and round must not replace it.
+//
+// The model's counterexample reaches the overwrite by applying the raw `set_decision`
+// builder twice in a row. No caller does that: `set_decision` has exactly one call site,
+// inside `commit()`, and the only way a second value can arrive is as another
+// `ProposalAndPrecommitValue` input. So this drives the realistic path — decide 9999,
+// then feed a commit for 8888 at the same height and round — and asserts the decision is
+// untouched. If the code really can overwrite a decision, this test FAILS.
+#[test]
+fn state_machine_decision_is_not_overwritten_by_a_conflicting_commit() {
+    let [(_v1, _sk1), (_v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let ctx = TestContext::new();
+
+    // Fresh state for height 1, round 0.
+    let state: State<TestContext> = new_round(Round::new(0));
+    let info = Info::new(Round::new(0), &my_addr, &my_addr);
+
+    let decided = Value::new(9999);
+    let conflicting = Value::new(8888);
+
+    // L49: +2/3 precommits for the proposal carrying `decided` — we commit it.
+    let proposal = Proposal::new(
+        Height::new(1),
+        Round::new(0),
+        decided.clone(),
+        Round::Nil,
+        my_addr,
+    );
+    let transition = state_machine::apply(
+        &ctx,
+        state,
+        &info,
+        RoundInput::ProposalAndPrecommitValue(proposal.clone()),
+    );
+
+    assert!(transition.valid);
+    assert_eq!(transition.next_state.step, Step::Commit);
+    assert_eq!(
+        transition.next_state.decision.as_ref().map(|d| &d.value),
+        Some(&decided)
+    );
+
+    // A commit for a different value in the same round arrives afterwards.
+    let conflicting_proposal = Proposal::new(
+        Height::new(1),
+        Round::new(0),
+        conflicting.clone(),
+        Round::Nil,
+        my_addr,
+    );
+    let transition = state_machine::apply(
+        &ctx,
+        transition.next_state,
+        &info,
+        RoundInput::ProposalAndPrecommitValue(conflicting_proposal),
+    );
+
+    assert!(
+        !transition.valid,
+        "a conflicting commit after a decision is not a valid transition"
+    );
+    assert_eq!(transition.output, None);
+    assert_eq!(
+        transition.next_state.decision.as_ref().map(|d| &d.value),
+        Some(&decided),
+        "the decided value must never be replaced by a different one"
+    );
+}
+
+// Pins `timeout_scheduled_at_most_once_per_round`: a propose/prevote/precommit timeout is
+// armed at most once per round, so a duplicate threshold cannot make the node start the same
+// timer twice.
+//
+// The model's counterexample reaches the duplicate by calling the raw `State::update_round`
+// mutator for the round it is ALREADY in, mid-Prevote: that clears the scheduled-timeout
+// bitset without leaving the round, so the next polka-any arms the prevote timer for round 0
+// a second time. No real client does that — `update_round` is only reached from `with_round`
+// (a round skip, which always moves to a strictly higher round) and from the two
+// `Step::Unstarted + NewRound` arms of the transition table.
+//
+// So this drives the most realistic path that gets near the same state: round 0, we are not
+// the proposer, a polka arms the prevote timer, and then the two things a real peer/consensus
+// layer can re-deliver arrive — a NewRound for the round we are already in, and further
+// prevotes (an equivocating nil from v1) that re-cross the polka-any threshold.
+//
+// This test PASSES: the model is looser than the code. Nothing a real client can send clears
+// the scheduled-timeout bitset without also leaving the round, so the duplicate the model
+// found is not reachable through the driver's public API.
+#[test]
+fn driver_prevote_timeout_is_armed_at_most_once_in_a_round() {
+    let value = Value::new(9999);
+
+    let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    let mut all_outputs = Vec::new();
+
+    // Round 0: we are not the proposer, so we arm the propose timeout.
+    all_outputs.extend(
+        driver
+            .process(new_round_input(Round::new(0), v1.address))
+            .expect("start round 0"),
+    );
+
+    // The propose timeout elapses, we prevote nil and move to the Prevote step.
+    all_outputs.extend(
+        driver
+            .process(timeout_propose_input(Round::new(0)))
+            .expect("propose timeout"),
+    );
+
+    // v1 and v2 prevote the proposal: with our own nil that is a polka for any, which arms
+    // the prevote timeout for round 0 (L34/L35).
+    all_outputs.extend(
+        driver
+            .process(prevote_input(value.clone(), &v1.address))
+            .expect("v1 prevote"),
+    );
+    all_outputs.extend(
+        driver
+            .process(prevote_input(value.clone(), &v2.address))
+            .expect("v2 prevote"),
+    );
+
+    // A NewRound for the round we are already in is re-delivered.
+    all_outputs.extend(
+        driver
+            .process(new_round_input(Round::new(0), v1.address))
+            .expect("re-delivered new round is not an error"),
+    );
+
+    // An equivocating nil prevote from v1 re-crosses the polka-any threshold.
+    all_outputs.extend(
+        driver
+            .process(prevote_nil_input(&v1.address))
+            .expect("equivocating prevote"),
+    );
+
+    assert_eq!(
+        driver.round(),
+        Round::new(0),
+        "none of these inputs leaves round 0"
+    );
+
+    let prevote_timers = all_outputs
+        .iter()
+        .filter(|o| **o == start_prevote_timer_output(Round::new(0)))
+        .count();
+
+    assert_eq!(
+        prevote_timers, 1,
+        "the prevote timeout for round 0 must be armed exactly once: {all_outputs:?}"
+    );
+
+    let propose_timers = all_outputs
+        .iter()
+        .filter(|o| **o == start_propose_timer_output(Round::new(0)))
+        .count();
+
+    assert_eq!(
+        propose_timers, 1,
+        "the propose timeout for round 0 must be armed exactly once: {all_outputs:?}"
     );
 }

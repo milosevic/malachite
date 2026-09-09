@@ -29,6 +29,7 @@ where
 
     pub fn connect_request_peer(&mut self, swarm: &mut Swarm<C>, request_data: RequestData) {
         if !self.should_connect_request(&request_data) {
+            crate::oracle::connect_request_peer(None, true);
             return;
         }
 
@@ -54,6 +55,8 @@ where
         self.controller
             .connect_request
             .register_in_progress(request_id, request_data);
+
+        crate::oracle::connect_request_peer(Some(&request_id), false);
     }
 
     pub(crate) fn handle_connect_request(
@@ -83,6 +86,8 @@ where
             debug!("Rejecting upgrade of peer {peer} to inbound peer as the limit is reached");
         }
 
+        crate::oracle::handle_connect_request(&peer);
+
         self.update_discovery_metrics();
 
         if swarm
@@ -103,6 +108,8 @@ where
         peer: PeerId,
         accepted: bool,
     ) {
+        crate::oracle::handle_connect_response(&request_id, accepted);
+
         self.controller
             .connect_request
             .remove_in_progress(&request_id);
@@ -152,6 +159,8 @@ where
             .connect_request
             .remove_in_progress(&request_id)
         {
+            crate::oracle::handle_failed_connect_request(&request_id);
+
             if request_data.retry.count() < self.config.connect_request_max_retries {
                 // Retry request after a delay
                 request_data.retry.inc_count();

@@ -31,12 +31,15 @@ where
             }
             Selection::None => {
                 warn!("No outbound candidates available");
+                crate::oracle::adjust_peers(None);
                 return;
             }
         };
 
         for peer_id in peers {
             self.outbound_peers.insert(peer_id, OutboundState::Pending);
+
+            crate::oracle::adjust_peers(Some(&peer_id));
 
             self.controller
                 .connect_request
@@ -102,6 +105,8 @@ where
             self.inbound_peers.remove(&peer_id);
             self.outbound_peers
                 .insert(peer_id, OutboundState::Confirmed);
+
+            crate::oracle::repair_outbound_peers(&peer_id);
 
             // Consider the connect request as done
             self.controller.connect_request.register_done_on(peer_id);

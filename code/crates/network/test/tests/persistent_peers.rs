@@ -30,6 +30,7 @@ fn make_config(port: usize) -> Config {
 }
 
 /// Test adding and removing persistent peers at runtime, including edge cases
+#[quint_oracle::test]
 #[tokio::test]
 async fn test_add_and_remove_persistent_peer() {
     init_logging();
@@ -104,6 +105,7 @@ async fn test_add_and_remove_persistent_peer() {
 }
 
 /// Test that adding a persistent peer establishes a connection
+#[quint_oracle::test]
 #[tokio::test]
 async fn test_persistent_peer_establishes_connection() {
     init_logging();
@@ -164,6 +166,7 @@ async fn test_persistent_peer_establishes_connection() {
 }
 
 /// Test removing a peer while a dial is in progress
+#[quint_oracle::test]
 #[tokio::test]
 async fn test_remove_peer_during_dial() {
     init_logging();
@@ -213,6 +216,7 @@ async fn test_remove_peer_during_dial() {
     handle1.shutdown().await.unwrap();
 }
 
+#[quint_oracle::test]
 #[tokio::test]
 async fn remove_address_only_persistent_peer_before_first_connection() {
     init_logging();
@@ -253,6 +257,7 @@ async fn remove_address_only_persistent_peer_before_first_connection() {
     handle1.shutdown().await.unwrap();
 }
 
+#[quint_oracle::test]
 #[tokio::test]
 async fn remove_address_only_persistent_peer_after_disconnect_clears_peer_id_on_reconnect() {
     init_logging();
@@ -387,6 +392,7 @@ async fn remove_address_only_persistent_peer_after_disconnect_clears_peer_id_on_
 }
 
 /// Test removing a peer while connected in persistent_peers_only mode
+#[quint_oracle::test]
 #[tokio::test]
 async fn test_remove_connected_peer_in_persistent_only_mode() {
     init_logging();
@@ -484,6 +490,7 @@ async fn test_remove_connected_peer_in_persistent_only_mode() {
 }
 
 /// Test race between add/remove and periodic dial_bootstrap_nodes
+#[quint_oracle::test]
 #[tokio::test]
 async fn test_add_remove_race_with_periodic_dial() {
     init_logging();
@@ -580,6 +587,7 @@ async fn test_add_remove_race_with_periodic_dial() {
 /// When explicit peering is enabled, a runtime-added persistent peer should
 /// join the gossipsub explicit-peer set as soon as the connection is
 /// established — not wait for some later event.
+#[quint_oracle::test]
 #[tokio::test]
 async fn test_runtime_add_marks_peer_explicit_when_explicit_peering_enabled() {
     init_logging();
@@ -675,6 +683,7 @@ async fn test_runtime_add_marks_peer_explicit_when_explicit_peering_enabled() {
 /// connected (e.g. inbound-only) must clear the gossipsub explicit-peer
 /// set immediately. The ConnectionClosed fallback never fires while the
 /// connection is up.
+#[quint_oracle::test]
 #[tokio::test]
 async fn test_runtime_remove_clears_explicit_when_still_connected() {
     init_logging();
@@ -800,6 +809,7 @@ async fn test_runtime_remove_clears_explicit_when_still_connected() {
 
 /// With explicit peering disabled (the default), runtime add of a
 /// persistent peer must not mark the peer as explicit.
+#[quint_oracle::test]
 #[tokio::test]
 async fn test_runtime_add_no_op_when_explicit_peering_disabled() {
     init_logging();
@@ -886,6 +896,7 @@ async fn test_runtime_add_no_op_when_explicit_peering_disabled() {
 
 /// A peer-only address (/p2p/<peer_id>, no transport) in `persistent_peers` with
 /// `persistent_peers_only` enabled must accept inbound connections from that peer.
+#[quint_oracle::test]
 #[tokio::test]
 async fn peer_only_addr_accepts_inbound_in_persistent_peers_only_mode() {
     init_logging();
@@ -975,6 +986,7 @@ async fn peer_only_addr_accepts_inbound_in_persistent_peers_only_mode() {
 
 /// A peer-only address (/p2p/<peer_id>, no transport) in `persistent_peers` with
 /// `persistent_peers_only` enabled must reject connections from unknown peers.
+#[quint_oracle::test]
 #[tokio::test]
 async fn peer_only_addr_rejects_unknown_in_persistent_peers_only_mode() {
     init_logging();

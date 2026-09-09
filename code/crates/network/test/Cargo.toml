@@ -9,6 +9,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+quint-oracle = { path = "../../../../quint-specs/oracle-client/rust" }
 malachitebft-network.workspace = true
 malachitebft-config.workspace = true
 malachitebft-signing-ed25519 = { workspace = true, features = ["rand"] }

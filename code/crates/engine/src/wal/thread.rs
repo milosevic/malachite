@@ -221,14 +221,12 @@ where
                 entries.push(decoded);
             }
             Err(e) => {
+                // Report the damaged entry and keep going. The entries are
+                // length-framed, so the ones behind a bad payload still read
+                // back cleanly — and one of them may be a vote this node
+                // already broadcast, which it must not forget.
                 error!("Failed to read WAL entry {idx}: {e}");
                 entries.push(Err(e));
-
-                log.truncate(idx as u64).map_err(|e| {
-                    eyre!("Failed to truncate WAL after read error at entry {idx}: {e}")
-                })?;
-
-                break;
             }
         }
     }

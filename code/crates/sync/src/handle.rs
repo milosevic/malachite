@@ -139,6 +139,24 @@ where
 {
     let Some(entry) = state.pending_requests.get(&request_id) else {
         warn!(%request_id, %peer_id, "Received response for unknown request ID");
+
+        if quint_oracle::enabled() {
+            let __q_request_id = state.oracle_request(&request_id);
+            let __q_peer = state.oracle_peer(peer_id);
+            quint_oracle::Event::builder(quint_oracle::current_test(), "on_value_response")
+                .argument("request_id", __q_request_id, Some("REQ_IDS"))
+                .argument("peer", __q_peer, Some("PEER_IDS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+                .scope("value-sync")
+                .send();
+        }
+
         return Ok(());
     };
     let requested_range = &entry.range;
@@ -224,6 +242,24 @@ where
 
     debug!("Peer scores: {:?}", state.peer_scorer.get_scores());
 
+    if quint_oracle::enabled() {
+        quint_oracle::Event::builder(quint_oracle::current_test(), "on_send_status_update")
+            .argument(
+                "prune_inactive",
+                state.config.inactive_threshold.is_some(),
+                None,
+            )
+            .assert(
+                Vec::from([
+                    quint_oracle::PathSeg::ident("st"),
+                    quint_oracle::PathSeg::ident("tip_height"),
+                ]),
+                state.tip_height.as_u64() as i64,
+            )
+            .scope("value-sync")
+            .send();
+    }
+
     Ok(())
 }
 
@@ -238,11 +274,36 @@ where
 {
     let peer_id = status.peer_id;
     let peer_height = status.tip_height;
+    let history_min_height = status.history_min_height;
 
     debug!(%peer_id, %peer_height, "Received peer status");
 
     state.update_status(status);
     metrics.status_received(state.peers.len() as u64);
+
+    if quint_oracle::enabled() {
+        let __q_peer = state.oracle_peer(peer_id);
+        quint_oracle::Event::builder(quint_oracle::current_test(), "on_status")
+            .argument("peer", __q_peer, Some("PEER_IDS"))
+            .argument("peer_tip", peer_height.as_u64() as i64, Some("HEIGHTS"))
+            .argument("hist_min", history_min_height.as_u64() as i64, Some("HEIGHTS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("tip_height"),
+                    ]),
+                    state.tip_height.as_u64() as i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+            .scope("value-sync")
+            .send();
+    }
 
     if !state.started {
         // Consensus has not started yet, no need to sync (yet).
@@ -296,6 +357,35 @@ where
         set_sync_height(state, max(state.sync_height, height));
     }
 
+    if quint_oracle::enabled() {
+        quint_oracle::Event::builder(quint_oracle::current_test(), "on_started_height")
+            .argument("height", height.as_u64() as i64, Some("HEIGHTS"))
+            .argument("is_restart", start_type.is_restart(), None)
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("tip_height"),
+                    ]),
+                    state.tip_height.as_u64() as i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+            .assert(
+                Vec::from([
+                    quint_oracle::PathSeg::ident("st"),
+                    quint_oracle::PathSeg::ident("consensus_height"),
+                ]),
+                state.consensus_height.as_u64() as i64,
+            )
+            .scope("value-sync")
+            .send();
+    }
+
     // Trigger potential requests if possible.
     request_values(co, state, metrics).await?;
 
@@ -324,6 +414,27 @@ where
     // Re-validate sync_height after tip advanced.
     set_sync_height(state, state.sync_height);
 
+    if quint_oracle::enabled() {
+        quint_oracle::Event::builder(quint_oracle::current_test(), "on_decided")
+            .argument("height", height.as_u64() as i64, Some("HEIGHTS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("tip_height"),
+                    ]),
+                    state.tip_height.as_u64() as i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+            .scope("value-sync")
+            .send();
+    }
+
     Ok(())
 }
 
@@ -349,6 +460,9 @@ where
 {
     debug!("Received request for values");
 
+    let __q_req_start = request.range.start().as_u64() as i64;
+    let __q_req_end = request.range.end().as_u64() as i64;
+
     if !validate_request_range::<Ctx>(&request.range, state.tip_height, state.config.batch_size) {
         debug!("Sending empty response to peer");
 
@@ -360,6 +474,23 @@ where
                 Default::default()
             )
         );
+
+        if quint_oracle::enabled() {
+            let __q_peer = state.oracle_peer(peer_id);
+            quint_oracle::Event::builder(quint_oracle::current_test(), "on_value_request")
+                .argument("peer", __q_peer, Some("PEER_IDS"))
+                .argument("req_start", __q_req_start, Some("HEIGHTS"))
+                .argument("req_end", __q_req_end, Some("HEIGHTS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("tip_height"),
+                    ]),
+                    state.tip_height.as_u64() as i64,
+                )
+                .scope("value-sync")
+                .send();
+        }
 
         return Ok(());
     }
@@ -380,6 +511,23 @@ where
         co,
         Effect::GetDecidedValues(request_id, range, Default::default())
     );
+
+    if quint_oracle::enabled() {
+        let __q_peer = state.oracle_peer(peer_id);
+        quint_oracle::Event::builder(quint_oracle::current_test(), "on_value_request")
+            .argument("peer", __q_peer, Some("PEER_IDS"))
+            .argument("req_start", __q_req_start, Some("HEIGHTS"))
+            .argument("req_end", __q_req_end, Some("HEIGHTS"))
+            .assert(
+                Vec::from([
+                    quint_oracle::PathSeg::ident("st"),
+                    quint_oracle::PathSeg::ident("tip_height"),
+                ]),
+                state.tip_height.as_u64() as i64,
+            )
+            .scope("value-sync")
+            .send();
+    }
 
     Ok(())
 }
@@ -447,6 +595,7 @@ where
 {
     let start = response.start_height;
     let values_count = response.values.len();
+    let __q_request_id = state.oracle_request(&request_id);
     debug!(start = %start, num_values = %values_count, %peer_id, "Received response from peer");
 
     // Extract cheap Copy data from the pending entry. NLL releases the borrow
@@ -520,6 +669,32 @@ where
         // directly, so the next request pass starts at the lowest uncovered
         // height rather than at the suffix of the range just answered.
         set_sync_height(state, min(state.sync_height, new_start));
+
+        if quint_oracle::enabled() {
+            let __q_peer = state.oracle_peer(peer_id);
+            quint_oracle::Event::builder(quint_oracle::current_test(), "on_valid_value_response")
+                .argument("request_id", __q_request_id, Some("REQ_IDS"))
+                .argument("peer", __q_peer, Some("PEER_IDS"))
+                .argument("start_height", start.as_u64() as i64, Some("HEIGHTS"))
+                .argument("count", values_count as i64, Some("COUNTS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("tip_height"),
+                    ]),
+                    state.tip_height.as_u64() as i64,
+                )
+                .scope("value-sync")
+                .send();
+        }
+
         request_values(co, state, metrics).await?;
     } else {
         if let Some(entry) = state.pending_requests.get_mut(&request_id) {
@@ -528,6 +703,31 @@ where
             // slot in the parallel-request budget. `prune_pending_requests` drops
             // it once consensus advances past the range.
             entry.inflight = false;
+        }
+
+        if quint_oracle::enabled() {
+            let __q_peer = state.oracle_peer(peer_id);
+            quint_oracle::Event::builder(quint_oracle::current_test(), "on_valid_value_response")
+                .argument("request_id", __q_request_id, Some("REQ_IDS"))
+                .argument("peer", __q_peer, Some("PEER_IDS"))
+                .argument("start_height", start.as_u64() as i64, Some("HEIGHTS"))
+                .argument("count", values_count as i64, Some("COUNTS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("tip_height"),
+                    ]),
+                    state.tip_height.as_u64() as i64,
+                )
+                .scope("value-sync")
+                .send();
         }
 
         // Spend the released slot now. The other callers of `request_values` are
@@ -554,11 +754,51 @@ where
 {
     debug!(%request_id, %peer_id, "Received invalid response");
 
+    let __q_request_id = state.oracle_request(&request_id);
+    let __q_pending_before: BTreeSet<OutboundRequestId> = if quint_oracle::enabled() {
+        state.pending_requests.keys().cloned().collect()
+    } else {
+        BTreeSet::new()
+    };
+
     state.peer_scorer.update_score(peer_id, SyncResult::Failure);
 
     // We do not trust the response, so we remove the pending request and re-request
     // the whole range from another peer.
     re_request_values_from_peer_except(&co, state, metrics, request_id, Some(peer_id)).await?;
+
+    if quint_oracle::enabled() {
+        let __q_peer = state.oracle_peer(peer_id);
+        let __q_new: Option<(OutboundRequestId, PeerId)> = state
+            .pending_requests
+            .iter()
+            .find(|(id, _)| !__q_pending_before.contains(*id))
+            .map(|(id, e)| (id.clone(), e.peer));
+        let __q_retry_peer = match &__q_new {
+                Some((_, p)) => state.oracle_peer(*p),
+                None => 0,
+            };
+        let __q_new_request_id = match &__q_new {
+            Some((id, _)) => state.oracle_request(id),
+            None => 0,
+        };
+
+        quint_oracle::Event::builder(quint_oracle::current_test(), "on_invalid_value_response")
+            .argument("request_id", __q_request_id, Some("REQ_IDS"))
+            .argument("peer", __q_peer, Some("PEER_IDS"))
+            .argument("retry_peer", __q_retry_peer, Some("PEER_IDS"))
+            .argument("new_request_id", __q_new_request_id, Some("REQ_IDS"))
+            .argument("send_ok", __q_new.is_some(), None)
+            .assert(
+                Vec::from([
+                    quint_oracle::PathSeg::ident("st"),
+                    quint_oracle::PathSeg::ident("sync_height"),
+                ]),
+                state.sync_height.as_u64() as i64,
+            )
+            .scope("value-sync")
+            .send();
+    }
 
     Ok(())
 }
@@ -576,6 +816,7 @@ where
 {
     info!(%request_id, range = %DisplayRange(&range), "Received {} values from host", values.len());
 
+    let __q_returned = values.len() as i64;
     let start = range.start();
     let end = range.end();
 
@@ -624,6 +865,16 @@ where
 
     metrics.value_response_sent(&request_id);
 
+    if quint_oracle::enabled() {
+        quint_oracle::Event::builder(quint_oracle::current_test(), "on_got_decided_values")
+            .argument("req_start", range.start().as_u64() as i64, Some("HEIGHTS"))
+            .argument("req_end", range.end().as_u64() as i64, Some("HEIGHTS"))
+            .argument("returned", __q_returned, Some("COUNTS"))
+            .argument("valid_prefix", valid_count as i64, Some("COUNTS"))
+            .scope("value-sync")
+            .send();
+    }
+
     Ok(())
 }
 
@@ -642,6 +893,13 @@ where
         Request::ValueRequest(value_request) => {
             info!(%peer_id, range = %DisplayRange(&value_request.range), "Sync request timed out");
 
+            let __q_request_id = state.oracle_request(&request_id);
+            let __q_pending_before: BTreeSet<OutboundRequestId> = if quint_oracle::enabled() {
+                state.pending_requests.keys().cloned().collect()
+            } else {
+                BTreeSet::new()
+            };
+
             state.peer_scorer.update_score(peer_id, SyncResult::Timeout);
 
             metrics.value_request_timed_out(value_request.range.start().as_u64());
@@ -657,6 +915,40 @@ where
 
             re_request_values_from_peer_except(&co, state, metrics, request_id, Some(peer_id))
                 .await?;
+
+            if quint_oracle::enabled() {
+                let __q_peer = state.oracle_peer(peer_id);
+                let __q_new: Option<(OutboundRequestId, PeerId)> = state
+                    .pending_requests
+                    .iter()
+                    .find(|(id, _)| !__q_pending_before.contains(*id))
+                    .map(|(id, e)| (id.clone(), e.peer));
+                let __q_retry_peer = match &__q_new {
+                Some((_, p)) => state.oracle_peer(*p),
+                None => 0,
+            };
+                let __q_new_request_id = match &__q_new {
+                    Some((id, _)) => state.oracle_request(id),
+                    None => 0,
+                };
+
+                quint_oracle::Event::builder(quint_oracle::current_test(), "on_sync_request_timed_out")
+                    .argument("request_id", __q_request_id, Some("REQ_IDS"))
+                    .argument("peer", __q_peer, Some("PEER_IDS"))
+                    .argument("retry_peer", __q_retry_peer, Some("PEER_IDS"))
+                    .argument("new_request_id", __q_new_request_id, Some("REQ_IDS"))
+                    .argument("send_ok", __q_new.is_some(), None)
+                    .assert(
+                        Vec::from([
+                            quint_oracle::PathSeg::ident("st"),
+                            quint_oracle::PathSeg::ident("sync_height"),
+                        ]),
+                        state.sync_height.as_u64() as i64,
+                    )
+                    .scope("value-sync")
+                    .send();
+            }
+
         }
     };
 
@@ -679,12 +971,53 @@ where
         Request::ValueRequest(value_request) => {
             info!(%peer_id, ?reason, range = %DisplayRange(&value_request.range), "Sync request failed");
 
+            let __q_request_id = state.oracle_request(&request_id);
+            let __q_pending_before: BTreeSet<OutboundRequestId> = if quint_oracle::enabled() {
+                state.pending_requests.keys().cloned().collect()
+            } else {
+                BTreeSet::new()
+            };
+
             state.peer_scorer.update_score(peer_id, SyncResult::Failure);
 
             metrics.value_request_failed(reason, value_request.range.start().as_u64());
 
             re_request_values_from_peer_except(co, state, metrics, request_id, Some(peer_id))
                 .await?;
+
+            if quint_oracle::enabled() {
+                let __q_peer = state.oracle_peer(peer_id);
+                let __q_new: Option<(OutboundRequestId, PeerId)> = state
+                    .pending_requests
+                    .iter()
+                    .find(|(id, _)| !__q_pending_before.contains(*id))
+                    .map(|(id, e)| (id.clone(), e.peer));
+                let __q_retry_peer = match &__q_new {
+                Some((_, p)) => state.oracle_peer(*p),
+                None => 0,
+            };
+                let __q_new_request_id = match &__q_new {
+                    Some((id, _)) => state.oracle_request(id),
+                    None => 0,
+                };
+
+                quint_oracle::Event::builder(quint_oracle::current_test(), "on_sync_request_failed")
+                    .argument("request_id", __q_request_id, Some("REQ_IDS"))
+                    .argument("peer", __q_peer, Some("PEER_IDS"))
+                    .argument("retry_peer", __q_retry_peer, Some("PEER_IDS"))
+                    .argument("new_request_id", __q_new_request_id, Some("REQ_IDS"))
+                    .argument("send_ok", __q_new.is_some(), None)
+                    .assert(
+                        Vec::from([
+                            quint_oracle::PathSeg::ident("st"),
+                            quint_oracle::PathSeg::ident("sync_height"),
+                        ]),
+                        state.sync_height.as_u64() as i64,
+                    )
+                    .scope("value-sync")
+                    .send();
+            }
+
         }
     };
 
@@ -724,7 +1057,48 @@ where
         .collect();
 
     for request_id in peer_request_ids {
+        let __q_request_id = state.oracle_request(&request_id);
+        let __q_pending_before: BTreeSet<OutboundRequestId> = if quint_oracle::enabled() {
+            state.pending_requests.keys().cloned().collect()
+        } else {
+            BTreeSet::new()
+        };
+
         re_request_values_from_peer_except(co, state, metrics, request_id, Some(peer_id)).await?;
+
+        if quint_oracle::enabled() {
+            let __q_peer = state.oracle_peer(peer_id);
+            let __q_new: Option<(OutboundRequestId, PeerId)> = state
+                .pending_requests
+                .iter()
+                .find(|(id, _)| !__q_pending_before.contains(*id))
+                .map(|(id, e)| (id.clone(), e.peer));
+            let __q_retry_peer = match &__q_new {
+                Some((_, p)) => state.oracle_peer(*p),
+                None => 0,
+            };
+            let __q_new_request_id = match &__q_new {
+                Some((id, _)) => state.oracle_request(id),
+                None => 0,
+            };
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "on_peer_disconnected")
+                .argument("request_id", __q_request_id, Some("REQ_IDS"))
+                .argument("peer", __q_peer, Some("PEER_IDS"))
+                .argument("retry_peer", __q_retry_peer, Some("PEER_IDS"))
+                .argument("new_request_id", __q_new_request_id, Some("REQ_IDS"))
+                .argument("send_ok", __q_new.is_some(), None)
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+                .scope("value-sync")
+                .send();
+        }
+
     }
 
     Ok(())
@@ -763,9 +1137,48 @@ where
     );
 
     if let Some((request_id, _stored_peer_id)) = state.get_request_id_by(height) {
+        let __q_request_id = state.oracle_request(&request_id);
+        let __q_pending_before: BTreeSet<OutboundRequestId> = if quint_oracle::enabled() {
+            state.pending_requests.keys().cloned().collect()
+        } else {
+            BTreeSet::new()
+        };
+
         // `except_peer_id = None`: the failure is not attributable to a peer,
         // so re-request without adding anyone to the exclusion set.
         re_request_values_from_peer_except(&co, state, metrics, request_id, None).await?;
+
+        if quint_oracle::enabled() {
+            let __q_new: Option<(OutboundRequestId, PeerId)> = state
+                .pending_requests
+                .iter()
+                .find(|(id, _)| !__q_pending_before.contains(*id))
+                .map(|(id, e)| (id.clone(), e.peer));
+            let __q_retry_peer = match &__q_new {
+                Some((_, p)) => state.oracle_peer(*p),
+                None => 0,
+            };
+            let __q_new_request_id = match &__q_new {
+                Some((id, _)) => state.oracle_request(id),
+                None => 0,
+            };
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "on_local_transient_error")
+                .argument("request_id", __q_request_id, Some("REQ_IDS"))
+                .argument("height", height.as_u64() as i64, Some("HEIGHTS"))
+                .argument("retry_peer", __q_retry_peer, Some("PEER_IDS"))
+                .argument("new_request_id", __q_new_request_id, Some("REQ_IDS"))
+                .argument("send_ok", __q_new.is_some(), None)
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+                .scope("value-sync")
+                .send();
+        }
     } else {
         error!(%height, "Received height for unknown request");
     }
@@ -795,7 +1208,49 @@ where
                 "Received response from different peer than expected"
             );
         }
+        let __q_request_id = state.oracle_request(&request_id);
+        let __q_pending_before: BTreeSet<OutboundRequestId> = if quint_oracle::enabled() {
+            state.pending_requests.keys().cloned().collect()
+        } else {
+            BTreeSet::new()
+        };
+
         re_request_values_from_peer_except(&co, state, metrics, request_id, Some(peer_id)).await?;
+
+        if quint_oracle::enabled() {
+            let __q_peer = state.oracle_peer(peer_id);
+            let __q_new: Option<(OutboundRequestId, PeerId)> = state
+                .pending_requests
+                .iter()
+                .find(|(id, _)| !__q_pending_before.contains(*id))
+                .map(|(id, e)| (id.clone(), e.peer));
+            let __q_retry_peer = match &__q_new {
+                Some((_, p)) => state.oracle_peer(*p),
+                None => 0,
+            };
+            let __q_new_request_id = match &__q_new {
+                Some((id, _)) => state.oracle_request(id),
+                None => 0,
+            };
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "on_peer_fault")
+                .argument("request_id", __q_request_id, Some("REQ_IDS"))
+                .argument("height", height.as_u64() as i64, Some("HEIGHTS"))
+                .argument("peer", __q_peer, Some("PEER_IDS"))
+                .argument("retry_peer", __q_retry_peer, Some("PEER_IDS"))
+                .argument("new_request_id", __q_new_request_id, Some("REQ_IDS"))
+                .argument("send_ok", __q_new.is_some(), None)
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+                .scope("value-sync")
+                .send();
+        }
+
     } else {
         error!(%peer_id, %height, "Received height for unknown request");
     }
@@ -854,9 +1309,42 @@ where
             break;
         };
 
+        let __q_pending_before: BTreeSet<OutboundRequestId> = if quint_oracle::enabled() {
+            state.pending_requests.keys().cloned().collect()
+        } else {
+            BTreeSet::new()
+        };
+
         let tracked =
             send_and_track_request_to_peer(&co, state, metrics, peer, range, BTreeSet::new())
                 .await?;
+
+        if quint_oracle::enabled() {
+            let __q_new: Option<OutboundRequestId> = state
+                .pending_requests
+                .keys()
+                .find(|id| !__q_pending_before.contains(*id))
+                .cloned();
+            let __q_new_request_id = match &__q_new {
+                Some(id) => state.oracle_request(id),
+                None => 0,
+            };
+            let __q_peer = state.oracle_peer(peer);
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "request_values")
+                .argument("peer", __q_peer, Some("PEER_IDS"))
+                .argument("new_request_id", __q_new_request_id, Some("REQ_IDS"))
+                .argument("send_ok", __q_new.is_some(), None)
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("st"),
+                        quint_oracle::PathSeg::ident("sync_height"),
+                    ]),
+                    state.sync_height.as_u64() as i64,
+                )
+                .scope("value-sync")
+                .send();
+        }
 
         if !tracked {
             // The send was not tracked, so the in-flight count is unchanged and

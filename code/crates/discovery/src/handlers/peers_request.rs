@@ -73,6 +73,7 @@ where
 
     pub fn peers_request_peer(&mut self, swarm: &mut Swarm<C>, request_data: RequestData) {
         if !self.is_enabled() || !self.should_peers_request(&request_data) {
+            crate::oracle::peers_request_peer(None, true);
             return;
         }
 
@@ -101,6 +102,8 @@ where
         self.controller
             .peers_request
             .register_in_progress(request_id, request_data);
+
+        crate::oracle::peers_request_peer(Some(&request_id), false);
     }
 
     pub(crate) fn handle_peers_request(
@@ -170,6 +173,8 @@ where
         request_id: OutboundRequestId,
         signed_records: Vec<SignedPeerRecordBytes>,
     ) {
+        crate::oracle::handle_peers_response(&request_id);
+
         self.controller
             .peers_request
             .remove_in_progress(&request_id);
@@ -190,6 +195,8 @@ where
             .peers_request
             .remove_in_progress(&request_id)
         {
+            crate::oracle::handle_failed_peers_request(&request_id);
+
             if request_data.retry.count() < self.config.request_max_retries {
                 // Retry request after a delay
                 request_data.retry.inc_count();

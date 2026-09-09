@@ -47,6 +47,7 @@ fn make_config(port: u16, persistent_peers: Vec<u16>, max_connections_per_ip: us
 }
 
 /// Tests that attack by a flood of connections from the same IP address is mitigated.
+#[quint_oracle::test]
 #[tokio::test]
 async fn same_ip_connection_attack() {
     init_logging();

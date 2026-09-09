@@ -92,6 +92,13 @@ impl DiscoveryRateLimiter {
         max_violations: u32,
         violation_expiry: Duration,
     ) -> Self {
+        crate::oracle::rate_limiter_new(
+            rate_window,
+            max_requests_per_window,
+            max_violations,
+            violation_expiry,
+        );
+
         Self {
             requests: HashMap::new(),
             violations: HashMap::new(),
@@ -110,6 +117,8 @@ impl DiscoveryRateLimiter {
     /// When rate limited, the violation count is incremented. If the violation
     /// count reaches `max_violations`, returns `MaxViolations` to signal disconnect.
     pub fn check_request(&mut self, peer_id: &PeerId) -> RateLimitResult {
+        crate::oracle::check_request(peer_id);
+
         let now = Instant::now();
 
         // Check if violations have expired and clear them if so
@@ -191,6 +200,8 @@ impl DiscoveryRateLimiter {
     /// Note: This does NOT clear violation count, which persists across sessions
     /// to support the backoff/banning system.
     pub fn remove_peer(&mut self, peer_id: &PeerId) {
+        crate::oracle::rate_limiter_remove_peer(peer_id);
+
         self.requests.remove(peer_id);
         // Violations are intentionally NOT cleared - they persist for backoff/ban decisions
     }

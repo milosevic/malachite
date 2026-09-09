@@ -16,6 +16,7 @@ all-features = true
 borsh = ["dep:borsh", "malachitebft-peer/borsh"]
 
 [dependencies]
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 malachitebft-core-types = { workspace = true }
 malachitebft-metrics = { workspace = true }
 malachitebft-peer = { workspace = true }

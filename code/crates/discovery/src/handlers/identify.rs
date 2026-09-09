@@ -138,6 +138,8 @@ where
             .get(&peer_id)
             .is_some_and(|connection_ids| connection_ids.contains(&connection_id))
         {
+            crate::oracle::handle_new_peer(&connection_id, &info.listen_addrs, true);
+
             return is_already_connected;
         }
 
@@ -149,6 +151,8 @@ where
                 peer = %peer_id, %connection_id,
                 "Rejecting connection from non-persistent peer as persistent_peers_only mode is on"
             );
+
+            crate::oracle::handle_new_peer(&connection_id, &info.listen_addrs, true);
 
             self.controller
                 .close
@@ -195,6 +199,8 @@ where
                     self.config.max_connections_per_peer
                 );
 
+                crate::oracle::handle_new_peer(&connection_id, &info.listen_addrs, false);
+
                 self.controller
                     .close
                     .add_to_queue((peer_id, connection_id), None);
@@ -214,6 +220,8 @@ where
 
             is_already_connected = false;
         }
+
+        crate::oracle::handle_new_peer(&connection_id, &info.listen_addrs, false);
 
         if self.is_enabled() {
             if self.outbound_peers.contains_key(&peer_id) {
@@ -301,5 +309,160 @@ where
         self.update_discovery_metrics();
 
         is_already_connected
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::time::Duration;
+
+    use libp2p::core::ConnectedPoint;
+    use libp2p::kad::store::MemoryStore;
+    use libp2p::kad::{self, Addresses, KBucketKey, KBucketRef, RoutingUpdate};
+    use libp2p::request_response::{OutboundRequestId, ResponseChannel};
+    use libp2p::swarm::{ConnectionId, NetworkBehaviour};
+    use libp2p::{identify, noise, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder};
+    use malachitebft_metrics::Registry;
+
+    use crate::{
+        config::Config, Discovery, DiscoveryClient, Request, Response,
+    };
+
+    thread_local! {
+        /// Every `(peer, address)` pair discovery handed to the Kademlia routing table.
+        static ROUTING_ADDS: RefCell<Vec<(PeerId, Multiaddr)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// The real Kademlia behaviour, with the routing-table insertions discovery
+    /// performs recorded so a test can assert on them.
+    #[derive(NetworkBehaviour)]
+    struct KadBehaviour {
+        kademlia: kad::Behaviour<MemoryStore>,
+    }
+
+    impl DiscoveryClient for KadBehaviour {
+        fn add_address(&mut self, peer: &PeerId, address: Multiaddr) -> RoutingUpdate {
+            ROUTING_ADDS.with(|adds| adds.borrow_mut().push((*peer, address.clone())));
+            self.kademlia.add_address(peer, address)
+        }
+
+        fn kbuckets(
+            &mut self,
+        ) -> impl Iterator<Item = KBucketRef<'_, KBucketKey<PeerId>, Addresses>> {
+            self.kademlia.kbuckets()
+        }
+
+        fn send_request(&mut self, _peer_id: &PeerId, _req: Request) -> OutboundRequestId {
+            unreachable!()
+        }
+
+        fn send_response(
+            &mut self,
+            _ch: ResponseChannel<Response>,
+            _rs: Response,
+        ) -> Result<(), Response> {
+            unreachable!()
+        }
+    }
+
+    fn build_swarm() -> Swarm<KadBehaviour> {
+        SwarmBuilder::with_new_identity()
+            .with_tokio()
+            .with_tcp(
+                tcp::Config::default(),
+                noise::Config::new,
+                yamux::Config::default,
+            )
+            .expect("tcp transport")
+            .with_behaviour(|keypair| {
+                let local = keypair.public().to_peer_id();
+                KadBehaviour {
+                    kademlia: kad::Behaviour::new(local, MemoryStore::new(local)),
+                }
+            })
+            .expect("kademlia behaviour")
+            .with_swarm_config(|config| {
+                config.with_idle_connection_timeout(Duration::from_secs(60))
+            })
+            .build()
+    }
+
+    /// reproduces obs:kad_address_added — fails on current code.
+    ///
+    /// `handle_new_peer` receives the peer's raw identify payload straight from
+    /// the swarm (network/src/lib.rs, `identify::Event::Received`), so
+    /// `info.listen_addrs` is entirely attacker-controlled.
+    /// `update_bootstrap_node_peer_id` deliberately refuses to trust it ("This
+    /// prevents address spoofing attacks where a malicious peer claims to be
+    /// listening on a bootstrap node's address"), but the Kademlia branch at the
+    /// end of the same function inserts `info.listen_addrs.first()` under the
+    /// reporting peer with no ownership check at all.
+    ///
+    /// Scenario: the node is running with default production settings (discovery
+    /// enabled, Kademlia bootstrap protocol) and knows a bootstrap node's real
+    /// address. An unknown peer opens an inbound connection from an ephemeral
+    /// address and identifies itself as listening on the bootstrap node's
+    /// address. The spec's `kad_table_addresses_owned_by_their_peer` invariant
+    /// requires every address in the routing table to belong to the peer it is
+    /// stored under, so this claim must be rejected.
+    #[tokio::test]
+    #[ignore]
+    async fn kademlia_routing_table_rejects_foreign_self_reported_address() {
+        ROUTING_ADDS.with(|adds| adds.borrow_mut().clear());
+
+        let mut swarm = build_swarm();
+
+        // The victim: a bootstrap node whose real address the node is configured with.
+        let victim_addr: Multiaddr = "/ip4/198.51.100.7/tcp/26656".parse().unwrap();
+
+        let mut registry = Registry::default();
+        let mut discovery = Discovery::<KadBehaviour>::new(
+            Config::default(),
+            vec![victim_addr.clone()],
+            &mut registry,
+        );
+
+        // The attacker dials us from an ephemeral address it really controls.
+        let attacker_keypair = libp2p::identity::Keypair::generate_ed25519();
+        let attacker_pid = attacker_keypair.public().to_peer_id();
+        let attacker_addr: Multiaddr = "/ip4/203.0.113.9/tcp/41337".parse().unwrap();
+        let connection_id = ConnectionId::new_unchecked(1);
+
+        discovery.handle_connection(
+            &mut swarm,
+            attacker_pid,
+            connection_id,
+            ConnectedPoint::Listener {
+                local_addr: "/ip4/10.0.0.1/tcp/26656".parse().unwrap(),
+                send_back_addr: attacker_addr,
+            },
+        );
+
+        // Its identify payload claims the victim's address as its own listen address.
+        let info = identify::Info {
+            public_key: attacker_keypair.public(),
+            protocol_version: "/malachitebft/consensus/v1beta1".to_string(),
+            agent_version: "malachite".to_string(),
+            listen_addrs: vec![victim_addr.clone()],
+            protocols: vec![],
+            observed_addr: "/ip4/10.0.0.1/tcp/26656".parse().unwrap(),
+            signed_peer_record: None,
+        };
+
+        discovery.handle_new_peer(&mut swarm, connection_id, attacker_pid, info);
+
+        let poisoned = ROUTING_ADDS.with(|adds| {
+            adds.borrow()
+                .iter()
+                .any(|(peer, addr)| peer == &attacker_pid && addr == &victim_addr)
+        });
+
+        assert!(
+            !poisoned,
+            "a peer's self-reported listen address was inserted into the Kademlia \
+             routing table without checking that the peer owns it: {attacker_pid} \
+             was registered at {victim_addr}"
+        );
     }
 }

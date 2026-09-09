@@ -40,6 +40,7 @@ where
         // Not checking if the peer was already dialed because it is done when
         // adding to the dial queue
         if !self.should_dial(swarm, &dial_data, false) {
+            crate::oracle::dial_peer(None, true);
             return;
         }
 
@@ -48,6 +49,7 @@ where
                 "No addresses to dial for peer {:?}, skipping dial attempt",
                 dial_data.peer_id()
             );
+            crate::oracle::dial_peer(None, false);
             return;
         };
         let connection_id = dial_opts.connection_id();
@@ -58,6 +60,8 @@ where
         self.controller
             .dial
             .register_in_progress(connection_id, dial_data.clone());
+
+        crate::oracle::dial_peer(Some(&connection_id), false);
 
         // Do not count retries as new interactions
         if dial_data.retry.count() == 0 {
@@ -92,6 +96,8 @@ where
         connection_id: ConnectionId,
         endpoint: ConnectedPoint,
     ) {
+        let inbound = matches!(endpoint, ConnectedPoint::Listener { .. });
+
         match endpoint {
             d @ ConnectedPoint::Dialer { .. } => {
                 let remote_addr = d.get_remote_address().clone();
@@ -133,6 +139,8 @@ where
             }
         }
 
+        crate::oracle::handle_connection(&peer_id, &connection_id, inbound);
+
         // This check is necessary to handle the case where two
         // nodes dial each other at the same time, which can lead
         // to a connection established (dialer) event for one node
@@ -159,12 +167,16 @@ where
     ) {
         if let Some(mut dial_data) = self.controller.dial.remove_in_progress(&connection_id) {
             // Skip retrying for errors that will occur again
-            if matches!(
+            let fatal = matches!(
                 error,
                 DialError::LocalPeerId { .. }
                     | DialError::NoAddresses
                     | DialError::WrongPeerId { .. }
-            ) {
+            );
+
+            crate::oracle::handle_failed_connection(&connection_id, fatal);
+
+            if fatal {
                 if let DialError::LocalPeerId { address } = &error {
                     if is_not_own_address(
                         address,
@@ -230,6 +242,8 @@ where
             // Don't register addresses because they may are untrusted (from peers response).
             self.controller.dial_register_done_on(&dial_data, false);
 
+            crate::oracle::dial_add_to_queue(&dial_data, None);
+
             self.controller.dial.add_to_queue(dial_data, None);
         }
     }
@@ -270,6 +284,7 @@ where
                 );
                 // For bootstrap nodes, register addresses too (trusted config)
                 self.controller.dial_register_done_on(&dial_data, true);
+                crate::oracle::dial_add_to_queue(&dial_data, None);
                 self.controller.dial.add_to_queue(dial_data, None);
             }
         }

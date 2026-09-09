@@ -18,6 +18,10 @@
 //! Regional Internet Registries typically hand out. IPv4-mapped IPv6 addresses
 //! are unmapped and keyed as IPv4.
 
+// Quint Studio oracle: value rendering for the instrumentation below.
+#[allow(unused_imports)]
+use quint_oracle::ToLogged as _;
+
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::task::{Context, Poll};
@@ -72,7 +76,12 @@ pub struct Behaviour {
     /// When the last eviction sweep ran. Used to throttle sweeps so that
     /// `poll()` does not iterate `ip_state` on every event loop tick.
     last_eviction: Instant,
+    /// Quint oracle: the identity this limiter reports as its `node`. The
+    /// limiter has no local peer id of its own, so each instance takes a
+    /// sequential one. Observational only — nothing reads it.
+    quint_node: String,
 }
+
 
 impl Behaviour {
     /// Create a new per-IP connection limiter with reconnect throttling.
@@ -86,6 +95,48 @@ impl Behaviour {
             *persistent_ips.entry(ip).or_insert(0) += 1;
         }
 
+        let quint_node = crate::quint_ids::limiter_node();
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Behaviournew_with_metrics")
+                .argument("node", quint_node.as_str(), Some("NODES"))
+                .argument(
+                    "max_connections_per_ip",
+                    max_connections_per_ip as i64,
+                    Some("CONN_LIMITS"),
+                )
+                .argument("num_inbound_peers", 0i64, Some("INBOUND_SLOTS"))
+                .argument("persistent_peers_only", false, None)
+                .argument("protocol", "GossipSub", None)
+                // The limiter composes no pubsub behaviour of its own; pubsub
+                // transitions belong to the swarm's node.
+                .argument("gossipsub_enabled", false, None)
+                .argument("broadcast_enabled", false, None)
+                .argument("pubsub_max_size", 0i64, Some("DATA_SIZES"))
+                .argument("consensus_address", "", Some("CONS_ADDR_SLOTS"))
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("nodes"),
+                        quint_oracle::PathSeg::value(quint_node.as_str()),
+                        quint_oracle::PathSeg::ident("connectionIps"),
+                    ],
+                    std::collections::BTreeMap::<String, String>::new(),
+                )
+                .scope("p2p-network")
+                .send();
+
+            for persistent_addr in persistent_peer_addrs {
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "Stateconfigure_persistent_peer",
+                )
+                .argument("node", quint_node.as_str(), Some("NODES"))
+                .argument("addr", crate::quint_ids::addr(persistent_addr), Some("ADDRS"))
+                .scope("p2p-network")
+                .send();
+            }
+        }
+
         Self {
             connection_ips: HashMap::new(),
             ip_state: HashMap::new(),
@@ -93,7 +144,17 @@ impl Behaviour {
             ip_throttle_duration,
             persistent_ips,
             last_eviction: Instant::now(),
+            quint_node,
         }
+    }
+
+    /// Quint oracle: the limiter's tracked connection -> IP map, the state the
+    /// spec's `connectionIps` mirrors.
+    fn quint_connection_ips(&self) -> std::collections::BTreeMap<String, String> {
+        self.connection_ips
+            .iter()
+            .map(|(cid, ip)| (crate::quint_ids::conn(*cid), crate::quint_ids::ip_name(ip)))
+            .collect()
     }
 
     /// Drop throttle-only entries whose cooldown has expired.
@@ -199,6 +260,34 @@ impl NetworkBehaviour for Behaviour {
                     max = self.max_connections_per_ip,
                     "Rejecting inbound connection: per-IP limit exceeded"
                 );
+                if quint_oracle::enabled() {
+                    quint_oracle::Event::builder(
+                        quint_oracle::current_test(),
+                        "ip_limitshandle_pending_inbound_connection",
+                    )
+                    .argument("node", self.quint_node.as_str(), Some("NODES"))
+                    .argument(
+        "connection_id",
+        crate::quint_ids::conn(connection_id),
+        Some("CONN_IDS"),
+    )
+                    .argument(
+                        "remote_addr",
+                        crate::quint_ids::addr(remote_addr),
+                        Some("ADDRS"),
+                    )
+                    .argument("throttled", false, None)
+                    .assert(
+                        vec![
+                            quint_oracle::PathSeg::ident("nodes"),
+                            quint_oracle::PathSeg::value(self.quint_node.as_str()),
+                            quint_oracle::PathSeg::ident("connectionIps"),
+                        ],
+                        self.quint_connection_ips(),
+                    )
+                    .scope("p2p-network")
+                    .send();
+                }
                 return Err(ConnectionDenied::new(IpLimitExceeded { ip, count }));
             }
 
@@ -214,6 +303,34 @@ impl NetworkBehaviour for Behaviour {
                                 throttle = ?self.ip_throttle_duration,
                                 "Rejecting inbound connection: reconnect too soon"
                             );
+                            if quint_oracle::enabled() {
+                                quint_oracle::Event::builder(
+                                    quint_oracle::current_test(),
+                                    "ip_limitshandle_pending_inbound_connection",
+                                )
+                                .argument("node", self.quint_node.as_str(), Some("NODES"))
+                                .argument(
+        "connection_id",
+        crate::quint_ids::conn(connection_id),
+        Some("CONN_IDS"),
+    )
+                                .argument(
+                                    "remote_addr",
+                                    crate::quint_ids::addr(remote_addr),
+                                    Some("ADDRS"),
+                                )
+                                .argument("throttled", true, None)
+                                .assert(
+                                    vec![
+                                        quint_oracle::PathSeg::ident("nodes"),
+                                        quint_oracle::PathSeg::value(self.quint_node.as_str()),
+                                        quint_oracle::PathSeg::ident("connectionIps"),
+                                    ],
+                                    self.quint_connection_ips(),
+                                )
+                                .scope("p2p-network")
+                                .send();
+                            }
                             return Err(ConnectionDenied::new(IpThrottled {
                                 ip,
                                 elapsed,
@@ -226,6 +343,63 @@ impl NetworkBehaviour for Behaviour {
 
             // Track immediately to prevent race conditions with concurrent connections
             self.track_connection(connection_id, ip);
+            if quint_oracle::enabled() {
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "ip_limitshandle_pending_inbound_connection",
+                )
+                .argument("node", self.quint_node.as_str(), Some("NODES"))
+                .argument(
+        "connection_id",
+        crate::quint_ids::conn(connection_id),
+        Some("CONN_IDS"),
+    )
+                .argument(
+                    "remote_addr",
+                    crate::quint_ids::addr(remote_addr),
+                    Some("ADDRS"),
+                )
+                .argument("throttled", false, None)
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("nodes"),
+                        quint_oracle::PathSeg::value(self.quint_node.as_str()),
+                        quint_oracle::PathSeg::ident("connectionIps"),
+                    ],
+                    self.quint_connection_ips(),
+                )
+                .scope("p2p-network")
+                .send();
+            }
+        } else {
+            if quint_oracle::enabled() {
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "ip_limitshandle_pending_inbound_connection",
+                )
+                .argument("node", self.quint_node.as_str(), Some("NODES"))
+                .argument(
+        "connection_id",
+        crate::quint_ids::conn(connection_id),
+        Some("CONN_IDS"),
+    )
+                .argument(
+                    "remote_addr",
+                    crate::quint_ids::addr(remote_addr),
+                    Some("ADDRS"),
+                )
+                .argument("throttled", false, None)
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("nodes"),
+                        quint_oracle::PathSeg::value(self.quint_node.as_str()),
+                        quint_oracle::PathSeg::ident("connectionIps"),
+                    ],
+                    self.quint_connection_ips(),
+                )
+                .scope("p2p-network")
+                .send();
+            }
         }
         Ok(())
     }
@@ -256,9 +430,47 @@ impl NetworkBehaviour for Behaviour {
         match event {
             FromSwarm::ConnectionClosed(info) => {
                 self.untrack_connection(info.connection_id);
+                if quint_oracle::enabled() {
+                    let connection_id = crate::quint_ids::conn(info.connection_id);
+                    quint_oracle::Event::builder(
+                        quint_oracle::current_test(),
+                        "ip_limitsconnection_closed",
+                    )
+                    .argument("node", self.quint_node.as_str(), Some("NODES"))
+                    .argument("connection_id", connection_id, Some("CONN_IDS"))
+                    .assert(
+                        vec![
+                            quint_oracle::PathSeg::ident("nodes"),
+                            quint_oracle::PathSeg::value(self.quint_node.as_str()),
+                            quint_oracle::PathSeg::ident("connectionIps"),
+                        ],
+                        self.quint_connection_ips(),
+                    )
+                    .scope("p2p-network")
+                    .send();
+                }
             }
             FromSwarm::ListenFailure(ListenFailure { connection_id, .. }) => {
                 self.untrack_connection(connection_id);
+                if quint_oracle::enabled() {
+                    let logged_id = crate::quint_ids::conn(connection_id);
+                    quint_oracle::Event::builder(
+                        quint_oracle::current_test(),
+                        "ip_limitslisten_failure",
+                    )
+                    .argument("node", self.quint_node.as_str(), Some("NODES"))
+                    .argument("connection_id", logged_id, Some("CONN_IDS"))
+                    .assert(
+                        vec![
+                            quint_oracle::PathSeg::ident("nodes"),
+                            quint_oracle::PathSeg::value(self.quint_node.as_str()),
+                            quint_oracle::PathSeg::ident("connectionIps"),
+                        ],
+                        self.quint_connection_ips(),
+                    )
+                    .scope("p2p-network")
+                    .send();
+                }
             }
             _ => {}
         }

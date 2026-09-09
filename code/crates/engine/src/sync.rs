@@ -18,7 +18,7 @@ use malachitebft_core_consensus::util::bounded_queue::BoundedQueue;
 use malachitebft_core_consensus::PeerId;
 use malachitebft_core_types::utils::height::DisplayRange;
 use malachitebft_core_types::ValueResponse as CoreValueResponse;
-use malachitebft_core_types::{Context, ExtendedCommitCertificate};
+use malachitebft_core_types::{Context, ExtendedCommitCertificate, Height as _};
 use malachitebft_network::Channel;
 use malachitebft_sync::{
     self as sync, HeightStartType, InboundFailureReason, InboundRequestId, OutboundRequestId,
@@ -697,6 +697,7 @@ where
                     .await?;
 
                 // Drain buffered sync responses for this height
+                let mut drained = 0usize;
                 for buffered in state.sync_queue.shift_and_take(&height) {
                     if let Err(e) = self
                         .consensus
@@ -705,6 +706,17 @@ where
                         error!("Failed to forward buffered sync response to consensus: {e}");
                         break;
                     }
+                    drained += 1;
+                }
+
+                if drained > 0 && quint_oracle::enabled() {
+                    quint_oracle::Event::builder(
+                        quint_oracle::current_test(),
+                        "process_value_response",
+                    )
+                    .argument("height", height.as_u64() as i64, Some("HEIGHTS"))
+                    .scope("value-sync")
+                    .send();
                 }
 
                 // Update metrics

@@ -1,3 +1,7 @@
+// Quint Studio oracle: value rendering for the instrumentation below.
+#[allow(unused_imports)]
+use quint_oracle::ToLogged as _;
+
 use std::error::Error;
 use std::ops::ControlFlow;
 use std::time::Duration;
@@ -41,6 +45,9 @@ pub mod peer_scoring;
 mod utils;
 
 mod ip_limits;
+
+/// Per-test identity projection for the Quint Studio oracle.
+mod quint_ids;
 pub mod validator_proof;
 
 // Re-export state types for external use (e.g., RPC)
@@ -439,6 +446,77 @@ pub async fn spawn(
         config.gossipsub.enable_explicit_peering,
     );
 
+    if quint_oracle::enabled() {
+        let node = quint_ids::node(swarm.local_peer_id());
+        quint_oracle::Event::builder(quint_oracle::current_test(), "Behaviournew_with_metrics")
+            .argument("node", node.as_str(), Some("NODES"))
+            .argument(
+                "max_connections_per_ip",
+                config.discovery.max_connections_per_ip as i64,
+                Some("CONN_LIMITS"),
+            )
+            .argument(
+                "num_inbound_peers",
+                config.discovery.num_inbound_peers as i64,
+                Some("INBOUND_SLOTS"),
+            )
+            .argument("persistent_peers_only", config.persistent_peers_only, None)
+            .argument(
+                "protocol",
+                match config.pubsub_protocol {
+                    PubSubProtocol::GossipSub => "GossipSub",
+                    PubSubProtocol::Broadcast => "Broadcast",
+                },
+                None,
+            )
+            .argument(
+                "gossipsub_enabled",
+                swarm.behaviour().gossipsub.is_enabled(),
+                None,
+            )
+            .argument(
+                "broadcast_enabled",
+                swarm.behaviour().broadcast.is_enabled(),
+                None,
+            )
+            .argument(
+                "pubsub_max_size",
+                config.pubsub_max_size as i64,
+                Some("DATA_SIZES"),
+            )
+            .argument(
+                "consensus_address",
+                state
+                    .local_node
+                    .consensus_address
+                    .as_deref()
+                    .map(|a| quint_ids::cons_addr(a, None))
+                    .unwrap_or_default(),
+                Some("CONS_ADDR_SLOTS"),
+            )
+            .assert(
+                vec![
+                    quint_oracle::PathSeg::ident("nodes"),
+                    quint_oracle::PathSeg::value(node.as_str()),
+                    quint_oracle::PathSeg::ident("localIsValidator"),
+                ],
+                state.local_node.is_validator,
+            )
+            .scope("p2p-network")
+            .send();
+
+        for persistent_addr in &config.persistent_peers {
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "Stateconfigure_persistent_peer",
+            )
+            .argument("node", node.as_str(), Some("NODES"))
+            .argument("addr", quint_ids::addr(persistent_addr), Some("ADDRS"))
+            .scope("p2p-network")
+            .send();
+        }
+    }
+
     let span = error_span!("network");
 
     info!(parent: span.clone(), %peer_id, "Starting network service");
@@ -800,9 +878,42 @@ async fn handle_swarm_event(
                 set_default_peer_score(swarm, peer_id);
             }
 
+            let quint_endpoint = if quint_oracle::enabled() {
+                Some((
+                    endpoint.is_dialer(),
+                    endpoint.get_remote_address().clone(),
+                ))
+            } else {
+                None
+            };
+
             state
                 .discovery
                 .handle_connection(swarm, peer_id, connection_id, endpoint);
+
+            if let Some((is_dialer, remote_addr)) = quint_endpoint.as_ref() {
+                let node = quint_ids::node(&state.local_node.peer_id);
+                let peer = quint_ids::peer(&peer_id);
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "envconnection_established",
+                )
+                .argument("node", node.as_str(), Some("NODES"))
+                .argument(
+                    "connection_id",
+                    quint_ids::conn(connection_id),
+                    Some("CONN_IDS"),
+                )
+                .argument("peer_id", peer.as_str(), Some("PEERS"))
+                .argument("remote_addr", quint_ids::addr(remote_addr), Some("ADDRS"))
+                .argument(
+                    "direction",
+                    if *is_dialer { "Outbound" } else { "Ephemeral" },
+                    None,
+                )
+                .scope("p2p-network")
+                .send();
+            }
         }
 
         SwarmEvent::OutgoingConnectionError {
@@ -847,6 +958,32 @@ async fn handle_swarm_event(
                 }
                 // Also clean up any pending proof (proof verified before Identify completed)
                 state.pending_verified_proofs.remove(&peer_id);
+
+                if quint_oracle::enabled() {
+                    let node = quint_ids::node(&state.local_node.peer_id);
+                    let peer = quint_ids::peer(&peer_id);
+                    let pending: std::collections::BTreeMap<String, String> = state
+                        .pending_verified_proofs
+                        .iter()
+                        .map(|(p, key)| (quint_ids::peer(p), quint_ids::public_key(key)))
+                        .collect();
+                    quint_oracle::Event::builder(
+                        quint_oracle::current_test(),
+                        "Stateremove_peer_on_disconnect",
+                    )
+                    .argument("node", node.as_str(), Some("NODES"))
+                    .argument("peer_id", peer.as_str(), Some("PEERS"))
+                    .assert(
+                        vec![
+                            quint_oracle::PathSeg::ident("nodes"),
+                            quint_oracle::PathSeg::value(node.as_str()),
+                            quint_oracle::PathSeg::ident("pendingProofs"),
+                        ],
+                        pending.to_logged(),
+                    )
+                    .scope("p2p-network")
+                    .send();
+                }
 
                 if let Err(e) = tx_event
                     .send(Event::PeerDisconnected(PeerId::from_libp2p(&peer_id)))
