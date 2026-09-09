@@ -1093,14 +1093,14 @@ where
         is_validator: bool,
     ) -> Result<(), WalFailure> {
         if phase == Phase::Recovering || !is_validator {
-            // During recovery we replay rather than write; non-validators don't
-            // persist — neither is an error.
             quint_oracle::log!(
                 consensus_wal_append_and_broadcast,
                 recovering: true,
                 [wal],
             );
 
+            // During recovery we replay rather than write; non-validators don't
+            // persist — neither is an error.
             return Ok(());
         }
 

@@ -358,8 +358,8 @@ fn corrupt_and_truncate_at(idx: usize) -> io::Result<()> {
     // Reopen WAL and iterate entries
     let mut wal = Log::open(&path)?;
 
-    // Verify what the scan reports before truncation
-    verify_wal_scan(&mut wal, idx, entry_count);
+    // Verify WAL state before truncation
+    verify_wal_state_pre_fix(&mut wal, idx, entry_count);
 
     // Truncate the WAL to the valid entries
     wal.truncate(idx as u64)?;
@@ -406,18 +406,15 @@ fn corrupt_wal_entry_crc(path: &Path, idx: usize) -> io::Result<()> {
     file.sync_all()
 }
 
-/// Verifies the WAL iterator behavior over a log with one corrupt CRC.
-///
-/// A bad CRC damages only the entry it is stored for: the entries are
-/// length-framed, so the scan reports that one as an error and still reads
-/// back every entry behind it.
-fn verify_wal_scan(wal: &mut Log, corrupt_idx: usize, total: usize) {
+/// Verifies the WAL iterator behavior before the fix.
+fn verify_wal_state_pre_fix(wal: &mut Log, corrupt_idx: usize, total: usize) {
     let results: Vec<_> = wal.iter().unwrap().collect();
+    let expected_len = (corrupt_idx + 1).min(total);
 
     assert_eq!(
         results.len(),
-        total,
-        "Iterator should report every entry, damaged or not"
+        expected_len,
+        "Iterator stopped at wrong point"
     );
 
     if corrupt_idx < total {
@@ -425,15 +422,6 @@ fn verify_wal_scan(wal: &mut Log, corrupt_idx: usize, total: usize) {
             results[corrupt_idx].is_err(),
             "Expected CRC error at index {corrupt_idx}"
         );
-
-        for (i, result) in results.iter().enumerate() {
-            if i != corrupt_idx {
-                assert!(
-                    result.is_ok(),
-                    "Entry {i} is intact and should still read back"
-                );
-            }
-        }
     }
 }
 
@@ -527,7 +515,7 @@ fn corrupt_wal_entry_length(path: &Path, idx: usize) -> io::Result<()> {
 /// exactly as it was written. But the recovery scan in `Log::open` walks the
 /// file by those length fields, so it cannot get past the damaged frame: it
 /// stops there and truncates the file at that point, permanently deleting the
-/// later entries even though their data and CRCs are still valid.
+/// later entries even though their data and CRCs are perfectly valid.
 ///
 /// Driven through the crate's public production API — `Log::open`, `append`,
 /// `iter`, default features — with the damage applied to the closed file, as

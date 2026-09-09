@@ -6,4 +6,7 @@ mod sync;
 mod validator_proof;
 mod vote_extension;
 mod wal_actor;
+mod wal_append;
 mod wal_codec;
+mod wal_replay;
+mod wal_started_height;
