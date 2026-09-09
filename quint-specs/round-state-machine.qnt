@@ -7,11 +7,10 @@
 //   code/crates/core-state-machine/src/state.rs          (State, ScheduledTimeouts, builders)
 //   code/crates/core-state-machine/src/input.rs, output.rs, transition.rs
 //
-// The model MIRRORS the code, panics and all: `prevote_previous`'s
-// `assert!(vr < proposal.round())` is modelled as a `panicked` latch rather than
-// silently idealised into a rejection, and `debug_assert!(info.is_proposer())` on
-// ProposeValue is modelled as the release build behaves (it proposes anyway) with
-// a latch. The intent lives in the `invariants` below.
+// The model MIRRORS the code. `prevote_previous`'s `assert!(vr < proposal.round())`
+// is still modelled as a `panicked` latch rather than idealised into a rejection,
+// though `is_valid_pol_round` now keeps that branch unreachable. The intent lives
+// in the `invariants` below.
 module round_state_machine {
 
   //--------------------------------------------------------------------------
@@ -170,7 +169,7 @@ module round_state_machine {
     val specific =
       match s.step {
         | Unstarted => Set("NewRound")
-        | Propose => Set("Proposal", "ProposalAndPolkaPrevious",
+        | Propose => Set("ProposeValue", "Proposal", "ProposalAndPolkaPrevious",
                          "InvalidProposalAndPolkaPrevious", "TimeoutPropose")
         | Prevote => Set("PolkaAny", "PolkaNil", "ProposalAndPolkaCurrent", "TimeoutPrevote")
         | Precommit => Set("ProposalAndPolkaCurrent")
@@ -395,9 +394,8 @@ module round_state_machine {
           else genericArms(s, i, inp, thisRound)
 
         | ProposeValue(v) =>
-          // debug_assert!(info.is_proposer()) — in release the proposal is emitted
-          // regardless of whether we are the proposer.
-          if (s.step == Propose and thisRound) propose(s, v)
+          // Only the proposer for the round may turn a value into a proposal.
+          if (s.step == Propose and thisRound and isProposer(i)) propose(s, v)
           else genericArms(s, i, inp, thisRound)
 
         | Proposal(p) =>

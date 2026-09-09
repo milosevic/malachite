@@ -224,7 +224,11 @@ module vote_keeper {
         match out { | SkipRound(r) => r | _ => -1 }
     }
 
-  /// evidence.rs::EvidenceMap::add — pair-deduped, in either order.
+  /// evidence.rs::MAX_EVIDENCE_PER_VALIDATOR — pairs retained per validator.
+  pure val MAX_EVIDENCE_PER_VALIDATOR: int = 3
+
+  /// evidence.rs::EvidenceMap::add — pair-deduped in either order, and capped at
+  /// MAX_EVIDENCE_PER_VALIDATOR pairs per validator; further pairs are dropped.
   pure def addEvidence(ev: Address -> List[(Vote, Vote)], existing: Vote, conflicting: Vote):
       Address -> List[(Vote, Vote)] =
     val addr = conflicting.src
@@ -232,7 +236,8 @@ module vote_keeper {
       val lst = ev.get(addr)
       val dup = lst.select(p =>
         (p._1 == existing and p._2 == conflicting) or (p._1 == conflicting and p._2 == existing))
-      if (dup.length() > 0) ev else ev.put(addr, lst.append((existing, conflicting)))
+      if (dup.length() > 0 or lst.length() >= MAX_EVIDENCE_PER_VALIDATOR) ev
+      else ev.put(addr, lst.append((existing, conflicting)))
     } else ev.put(addr, List((existing, conflicting)))
 
   // ══════════════ state ══════════════
@@ -559,10 +564,11 @@ module vote_keeper {
         p._1.voteType == p._2.voteType and p._1.round == p._2.round and
         p._1.value != p._2.value))
 
-  /// A single validator's equivocation evidence never accumulates more than one
-  /// proven pair, so a flooding equivocator cannot grow the keeper's memory.
+  /// A single validator's equivocation evidence never accumulates more than the
+  /// retention cap, so a flooding equivocator cannot grow the keeper's memory.
   val evidence_bounded_per_validator: bool =
-    evidence.keys().forall(a => evidence.get(a).length() <= 1)
+    evidence.keys().forall(a =>
+      evidence.get(a).length() <= MAX_EVIDENCE_PER_VALIDATOR)
 
   /// A precommit quorum on nil is reported with an output of its own, never the
   /// PrecommitAny that a quorum split across different values reports.

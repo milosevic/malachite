@@ -62,11 +62,32 @@ module consensusOrchestratorCore {
   pure val QuorumSize: int = 1
 
   pure val Heights: Set[Height] = 0.to(5)
-  pure val Rounds:  Set[Round]  = 0.to(3)
-  pure val Values:  Set[Value]  = Set(1, 2)
+  /// Rounds the model picks from: the low rounds consensus normally runs, plus
+  /// the future-round-lookahead boundaries (`MaxFutureRoundLookahead` and one
+  /// past it, from round 0 and from round 3) that the ceiling is defined by.
+  pure val Rounds:  Set[Round]  = 0.to(3).union(Set(10, 11, 13, 14))
+  /// Value identities the model picks from — the tests flood a single
+  /// `(height, round)` with up to `MaxProposalsPerRound + 8` distinct values.
+  pure val Values:  Set[Value]  = 1.to(12)
 
   /// Distinct heights the input queue can hold (`State::new` queue capacity).
   pure val QueueCapacity: int = 1
+
+  /// Distinct voters at a higher round that make the driver skip to it — the
+  /// `f+1` SkipRound threshold, with the equal-power validator sets the tests
+  /// use (`params.rs:16-19`).
+  pure val SkipThreshold: int = 2
+
+  /// Distinct proposals/values the full-proposal keeper retains per
+  /// `(height, round)`; a further distinct entry is dropped before anything is
+  /// persisted, unless it is exempt (`full_proposal.rs:13`,
+  /// `state.rs:198-207`).
+  pure val MaxProposalsPerRound: int = 2
+
+  /// Rounds ahead of the current round from which votes are still accepted;
+  /// beyond it a vote is dropped before dedupe, verification and WAL append
+  /// (`params.rs:20`, `handle/vote.rs:77-97`).
+  pure val MaxFutureRoundLookahead: Round = 10
 
   // ===========================================================================
   // Enums
@@ -157,6 +178,8 @@ module consensusOrchestratorCore {
     duplicateIgnored:      bool,
     unknownVoterRejected:  bool,
     badSignatureRejected:  bool,
+    futureRoundDropped:    bool,
+    capDropped:            bool,
   }
 
   // ===========================================================================
@@ -181,6 +204,18 @@ module consensusOrchestratorCore {
   /// A `Full` proposal exists for (r, v): a signed proposal AND its value.
   pure def isFull(st: OrchState, r: Round, v: Value): bool =
     st.proposalsSeen.contains((r, v)) and st.valuesSeen.exists(x => x._1 == r and x._2 == v)
+
+  /// The distinct value identities the keeper holds for `(height, r)`.
+  pure def entriesAtRound(st: OrchState, r: Round): Set[Value] =
+    st.proposalsSeen.filter(x => x._1 == r).map(x => x._2)
+      .union(st.valuesSeen.filter(x => x._1 == r).map(x => x._2))
+
+  /// `State::exceeds_per_round_cap`: a new distinct entry at a round already at
+  /// the cap, with no polka certificate to exempt it.
+  pure def exceedsPerRoundCap(st: OrchState, r: Round, v: Value): bool =
+    not(entriesAtRound(st, r).contains(v))
+      and entriesAtRound(st, r).size() >= MaxProposalsPerRound
+      and not(st.polkaCerts.contains((r, v)))
 
   pure def maxOf(hs: Set[Height]): Height =
     hs.fold(0, (a, x) => if (x > a) x else a)
@@ -283,6 +318,7 @@ module consensusOrchestratorCore {
                else st.precommits.contains((vr, voter, v))
     if (vh < st.height) dropPast(st)
     else if (vh > st.height or st.round == NilRound) bufferInput(st, vh)
+    else if (vr > st.round + MaxFutureRoundLookahead) { ...st, futureRoundDropped: true }
     else if (seen) { ...st, duplicateIgnored: true }
     else if (not(Validators.contains(voter))) { ...st, unknownVoterRejected: true }
     else if (not(sigOk)) { ...st, badSignatureRejected: true }
@@ -291,13 +327,23 @@ module consensusOrchestratorCore {
       val recorded =
         if (vt == PrevoteT) { ...logged, prevotes: logged.prevotes.union(Set((vr, voter, v))) }
         else { ...logged, precommits: logged.precommits.union(Set((vr, voter, v))) }
-      cascade(recorded)
+      // The driver's SkipRound mechanism: `f+1` distinct voters at a higher
+      // round make the node enter that round.
+      val votersAtRound =
+        recorded.prevotes.union(recorded.precommits).filter(x => x._1 == vr).map(x => x._2)
+      val skipped =
+        if (vr > recorded.round and recorded.step != Commit
+            and votersAtRound.size() >= SkipThreshold)
+          { ...recorded, round: vr, step: Propose }
+        else recorded
+      cascade(skipped)
 
   /// `Input::Proposal` → `handle/proposal.rs::on_proposal`.
   pure def procProposal(st: OrchState, ph: Height, pr: Round, v: Value, sigOk: bool): OrchState =
     if (ph < st.height) dropPast(st)
     else if (ph > st.height or st.round == NilRound) bufferInput(st, ph)
     else if (not(sigOk)) { ...st, badSignatureRejected: true }
+    else if (exceedsPerRoundCap(st, pr, v)) { ...st, capDropped: true }
     else
       val stored = { ...st, proposalsSeen: st.proposalsSeen.union(Set((pr, v))) }
       val prevoted =
@@ -313,6 +359,8 @@ module consensusOrchestratorCore {
                      valid: bool, origin: Origin): OrchState =
     if (pvh < st.height) dropPast(st)
     else if (pvh > st.height) bufferInput(st, pvh)
+    else if (origin == ConsensusOrigin and exceedsPerRoundCap(st, pvr, v))
+      { ...st, capDropped: true }
     else
       val stored = { ...st, valuesSeen: st.valuesSeen.union(Set((pvr, v, valid))) }
       if (stored.commitCerts.contains((pvr, v)) and valid and st.decidedValue == NilValue)
@@ -473,6 +521,8 @@ module consensus_orchestrator {
       duplicateIgnored: false,
       unknownVoterRejected: false,
       badSignatureRejected: false,
+      futureRoundDropped: false,
+      capDropped: false,
     }
   }
 

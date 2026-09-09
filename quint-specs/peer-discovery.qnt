@@ -17,7 +17,8 @@ module peer_discovery_core {
     | MAddr(int)
 
   type DialData = {
-    peer_id: Option[int],
+    // NO_PEER when the peer id is not (yet) known
+    peer_id: int,
     listen_addrs: Set[int],
     retry: int,
     // set at construction; only DialData::new_bootstrap sets it (dial.rs:27-34)
@@ -60,8 +61,8 @@ module peer_discovery_core {
     outbound: int -> OutboundState,
     inbound: Set[int],
     // the single configured bootstrap entry's peer id; None until identified,
-    // reset to None again when its last connection closes (close.rs:112-124)
-    bootstrap_pid: Option[int],
+    // reset to NO_PEER again when its last connection closes (close.rs:112-124)
+    bootstrap_pid: int,
     // the Kademlia routing table, filled from SELF-REPORTED identify addresses
     // (handlers/identify.rs:284-289)
     kad_table: int -> Set[int],
@@ -70,6 +71,11 @@ module peer_discovery_core {
   type RateLimiter = {
     requests: int -> Window,
     violations: int -> Violation,
+    // set by DiscoveryRateLimiter::new (rate_limiter.rs:86-101)
+    max_requests: int,
+    max_violations: int,
+    rate_window: int,
+    violation_expiry: int,
   }
 
   /// bookkeeping the code does not keep; used only by observations and invariants
@@ -100,7 +106,8 @@ module peer_discovery_core {
 
   // ─── configuration (code defaults, scaled down) ──────────────────────────
 
-  pure val LOCAL: int = 0
+  pure val NO_PEER: int = 0
+  pure val LOCAL: int = 9
   pure val LOCAL_ADDRS: Set[int] = Set(5)
   pure val PEERS: Set[int] = Set(1, 2, 3)
   /// two peer ids of the same adversarial operator (2 and 3)
@@ -124,6 +131,7 @@ module peer_discovery_core {
   pure val RETRY_DELAY: int = 0
 
   // rate_limiter.rs defaults, scaled: 6 per 60s / 3 violations / 10min expiry
+  // milliseconds, the unit the instrumentation logs durations in
   pure val RATE_WINDOW: int = 5
   pure val MAX_REQUESTS_PER_WINDOW: int = 1
   pure val MAX_VIOLATIONS: int = 2
@@ -149,10 +157,7 @@ module peer_discovery_core {
   /// Controller::dial_is_done_on (controller.rs:155-164)
   pure def dial_is_done_on(c: Ctrl, d: DialData): bool =
     or {
-      match d.peer_id {
-        | Some(p) => c.dial_done_on.contains(PId(p))
-        | None => false
-      },
+      d.peer_id != NO_PEER and c.dial_done_on.contains(PId(d.peer_id)),
       d.listen_addrs.exists(a => c.dial_done_on.contains(MAddr(a))),
     }
 
@@ -162,10 +167,8 @@ module peer_discovery_core {
   /// Discovery::should_dial (handlers/dial.rs:20-35)
   pure def should_dial(n: Node, c: Ctrl, d: DialData, check_already_dialed: bool): bool =
     and {
-      match d.peer_id {
-        | Some(p) => p != LOCAL and not(n.active_connections.has(p))
-        | None => true
-      },
+      d.peer_id == NO_PEER or
+        (d.peer_id != LOCAL and not(n.active_connections.has(d.peer_id))),
       or {
         not(check_already_dialed),
         not(dial_is_done_on(c, d)),
@@ -207,25 +210,25 @@ module peer_discovery_core {
 
   /// the violation-expiry branch: clears BOTH violations and the request window
   pure def rl_expired(rl: RateLimiter, p: int, now: int): bool =
-    rl.violations.has(p) and now - rl.violations.get(p).last >= VIOLATION_EXPIRY
+    rl.violations.has(p) and now - rl.violations.get(p).last >= rl.violation_expiry
 
   pure def rl_expire(rl: RateLimiter, p: int, now: int): RateLimiter =
     if (rl_expired(rl, p, now))
-      { requests: rl.requests.mapRemove(p), violations: rl.violations.mapRemove(p) }
+      { ...rl, requests: rl.requests.mapRemove(p), violations: rl.violations.mapRemove(p) }
     else
       rl
 
   /// DiscoveryRateLimiter::check_request — the whole three-outcome machine
   pure def rl_check(rl: RateLimiter, p: int, now: int): (RateLimiter, RlResult) = {
     val r1 = rl_expire(rl, p, now)
-    if (violations_of(r1, p) >= MAX_VIOLATIONS)
+    if (violations_of(r1, p) >= r1.max_violations)
       (r1, MaxViolations)
-    else if (r1.requests.has(p) and now - r1.requests.get(p).start < RATE_WINDOW) {
+    else if (r1.requests.has(p) and now - r1.requests.get(p).start < r1.rate_window) {
       val w = r1.requests.get(p)
-      if (w.count >= MAX_REQUESTS_PER_WINDOW) {
+      if (w.count >= r1.max_requests) {
         val vc = violations_of(r1, p) + 1
         val r2 = { ...r1, violations: r1.violations.put(p, { count: vc, last: now }) }
-        (r2, if (vc >= MAX_VIOLATIONS) MaxViolations else RateLimited)
+        (r2, if (vc >= r1.max_violations) MaxViolations else RateLimited)
       } else
         ({ ...r1, requests: r1.requests.put(p, { ...w, count: w.count + 1 }) }, Allowed)
     } else
@@ -233,8 +236,8 @@ module peer_discovery_core {
   }
 
   /// independent admission counter over the real-time window (ghost only)
-  pure def bump_admitted(g: Ghost, p: int, now: int): int -> Window =
-    if (g.admitted.has(p) and now - g.admitted.get(p).start < RATE_WINDOW) {
+  pure def bump_admitted(g: Ghost, p: int, now: int, window: int): int -> Window =
+    if (g.admitted.has(p) and now - g.admitted.get(p).start < window) {
       val a = g.admitted.get(p)
       g.admitted.put(p, { ...a, count: a.count + 1 })
     } else
@@ -245,10 +248,8 @@ module peer_discovery_core {
   /// Controller::dial_register_done_on (controller.rs:141-153)
   pure def do_dial_register_done_on(c: Ctrl, d: DialData, register_addrs: bool): Ctrl = {
     val with_pid =
-      match d.peer_id {
-        | Some(p) => c.dial_done_on.union(Set(PId(p)))
-        | None => c.dial_done_on
-      }
+      if (d.peer_id != NO_PEER) c.dial_done_on.union(Set(PId(d.peer_id)))
+      else c.dial_done_on
     val with_addrs =
       if (register_addrs) with_pid.union(d.listen_addrs.map(a => MAddr(a))) else with_pid
     { ...c, dial_done_on: with_addrs }
@@ -270,10 +271,8 @@ module peer_discovery_core {
 
   /// addresses in this dial that belong to somebody other than its own peer id
   pure def foreign_addrs(d: DialData): Set[int] =
-    match d.peer_id {
-      | Some(p) => d.listen_addrs.filter(a => addr_owner(a) != p)
-      | None => d.listen_addrs
-    }
+    if (d.peer_id != NO_PEER) d.listen_addrs.filter(a => addr_owner(a) != d.peer_id)
+    else d.listen_addrs
 
   pure def initial_ctrl: Ctrl = {
     dial_done_on: Set(),
@@ -295,11 +294,18 @@ module peer_discovery_core {
     discovered: Map(),
     outbound: Map(),
     inbound: Set(),
-    bootstrap_pid: None,
+    bootstrap_pid: NO_PEER,
     kad_table: Map(),
   }
 
-  pure val initial_rl: RateLimiter = { requests: Map(), violations: Map() }
+  pure val initial_rl: RateLimiter = {
+    requests: Map(),
+    violations: Map(),
+    max_requests: MAX_REQUESTS_PER_WINDOW,
+    max_violations: MAX_VIOLATIONS,
+    rate_window: RATE_WINDOW,
+    violation_expiry: VIOLATION_EXPIRY,
+  }
 
   pure val initial_ghost: Ghost = {
     registered_addrs: Set(),
@@ -358,8 +364,11 @@ module peer_discovery {
   /// Controller::dial_register_done_on. `register_addrs = true` is documented as
   /// legal only for trusted (bootstrap) dial data (controller.rs:135-153).
   action Controllerdial_register_done_on(dial_data: DialData, register_addrs: bool): bool = all {
-    // documented precondition, not enforced by the body
-    register_addrs implies dial_data.is_bootstrap,
+    // documented precondition, not enforced by the body: register_addrs is only
+    // legal for TRUSTED dial data — either flagged bootstrap at construction, or
+    // carrying nothing but configured bootstrap addresses (controller.rs:135-140)
+    register_addrs implies
+      (dial_data.is_bootstrap or dial_data.listen_addrs.subseteq(BOOTSTRAP_ADDRS)),
     ctrl' = do_dial_register_done_on(ctrl, dial_data, register_addrs),
     ghost' = { ...ghost,
       registered_addrs:
@@ -392,6 +401,20 @@ module peer_discovery {
     node' = node,
     clock' = clock,
     ghost' = ghost,
+  }
+
+  /// DiscoveryRateLimiter::new — a fresh limiter with its configured bounds
+  /// (rate_limiter.rs:86-101)
+  action DiscoveryRateLimiternew(
+      max_requests: int, max_violations: int,
+      rate_window: int, violation_expiry: int): bool = all {
+    rl' = { requests: Map(), violations: Map(), max_requests: max_requests,
+            max_violations: max_violations, rate_window: rate_window,
+            violation_expiry: violation_expiry },
+    ghost' = { ...ghost, admitted: Map(), last_rl: RlNone },
+    ctrl' = ctrl,
+    node' = node,
+    clock' = clock,
   }
 
   // ═══ dial path ═══════════════════════════════════════════════════════════
@@ -439,9 +462,9 @@ module peer_discovery {
       ctrl.dial_queue.length() > 0,
       front.ready_at <= clock,
       dial_can_perform(ctrl),
-      CONNS.contains(connection_id),
-      not(ctrl.dial_in_progress.has(connection_id)),
       val rest = ctrl.dial_queue.tail()
+      // the drop branches never reach swarm.dial, so no connection id exists
+      // for them (handlers/dial.rs:42-52) — the instrumentation logs 0 there
       if (not(should_dial(node, ctrl, front.d, false)) or not(has_dial_opts(front.d)))
         all {
           ctrl' = { ...ctrl, dial_queue: rest },
@@ -450,6 +473,8 @@ module peer_discovery {
         }
       else
         all {
+          CONNS.contains(connection_id),
+          not(ctrl.dial_in_progress.has(connection_id)),
           ctrl' = {
             ...do_dial_register_done_on(ctrl, front.d, false),
             dial_queue: rest,
@@ -482,7 +507,7 @@ module peer_discovery {
           dial_in_progress:
             if (ctrl.dial_in_progress.has(connection_id))
               ctrl.dial_in_progress.put(connection_id,
-                { ...ctrl.dial_in_progress.get(connection_id), peer_id: Some(peer_id) })
+                { ...ctrl.dial_in_progress.get(connection_id), peer_id: peer_id })
             else ctrl.dial_in_progress }
       else
         ctrl,
@@ -532,11 +557,11 @@ module peer_discovery {
     val at_conn_limit = existing.size() >= MAX_CONNECTIONS_PER_PEER
     // bootstrap identification uses the address we dialed / the TCP remote address
     val is_bootstrap_peer =
-      node.bootstrap_pid == None and
+      node.bootstrap_pid == NO_PEER and
       ((not(info.inbound) and
         ctrl.dial_in_progress.keys().exists(cid =>
           ctrl.dial_in_progress.get(cid).listen_addrs.intersect(BOOTSTRAP_ADDRS) != Set() and
-          ctrl.dial_in_progress.get(cid).peer_id == Some(peer_id))) or
+          ctrl.dial_in_progress.get(cid).peer_id == peer_id)) or
        (info.inbound and BOOTSTRAP_ADDRS.contains(peer_id * 10)))
     all {
       node.connections.has(connection_id),
@@ -575,7 +600,7 @@ module peer_discovery {
             discovered: node.discovered.put(peer_id, listen_addrs),
             active_connections:
               node.active_connections.put(peer_id, existing.union(Set(connection_id))),
-            bootstrap_pid: if (is_bootstrap_peer) Some(peer_id) else node.bootstrap_pid }
+            bootstrap_pid: if (is_bootstrap_peer) peer_id else node.bootstrap_pid }
           if (not(n1.outbound.has(peer_id)) and not(n1.inbound.contains(peer_id)) and
               n1.phase == Idle and n1.outbound.keys().size() < NUM_OUTBOUND_PEERS)
             { ...n1, outbound: n1.outbound.put(peer_id, Pending) }
@@ -619,7 +644,7 @@ module peer_discovery {
     val conns = node.active_connections.getOrElse(peer_id, Set())
     val remaining = conns.exclude(Set(connection_id))
     val was_last = conns.contains(connection_id) and remaining == Set()
-    val is_bootstrap_peer = node.bootstrap_pid == Some(peer_id)
+    val is_bootstrap_peer = node.bootstrap_pid == peer_id and peer_id != NO_PEER
     val addrs = node.discovered.getOrElse(peer_id, Set())
     all {
       PEERS.contains(peer_id),
@@ -639,7 +664,7 @@ module peer_discovery {
             outbound: node.outbound.mapRemove(peer_id),
             inbound: node.inbound.exclude(Set(peer_id)),
             discovered: node.discovered.mapRemove(peer_id),
-            bootstrap_pid: if (is_bootstrap_peer) None else node.bootstrap_pid },
+            bootstrap_pid: if (is_bootstrap_peer) NO_PEER else node.bootstrap_pid },
       ctrl' = {
         val c1 = { ...ctrl, dial_in_progress: ctrl.dial_in_progress.mapRemove(connection_id) }
         if (not(was_last)) c1
@@ -702,41 +727,28 @@ module peer_discovery {
       ghost' = { ...ghost,
         last_rl: res._2,
         rl_expiry_fired: ghost.rl_expiry_fired or rl_expired(rl, peer, clock),
-        admitted: if (allowed) bump_admitted(ghost, peer, clock) else ghost.admitted,
+        admitted: if (allowed) bump_admitted(ghost, peer, clock, rl.rate_window)
+                  else ghost.admitted,
         blocked_peer_admitted: ghost.blocked_peer_admitted or
-          (allowed and violations_of(rl, peer) >= MAX_VIOLATIONS and
+          (allowed and violations_of(rl, peer) >= rl.max_violations and
            not(rl_expired(rl, peer, clock))) },
       node' = node,
       clock' = clock,
     }
   }
 
-  /// Discovery::handle_peers_response — every verified record with at least one
-  /// address is added to the dial queue (handlers/peers_request.rs:169-262)
-  action handle_peers_response(request_id: int, record_peer: int, record_addrs: Set[int]): bool = {
-    val d: DialData = { peer_id: Some(record_peer), listen_addrs: record_addrs,
-                        retry: 0, is_bootstrap: false }
-    all {
-      ctrl.peers_req_in_progress.has(request_id),
-      PEERS.contains(record_peer),
-      record_addrs.subseteq(ADDRS),
-      record_addrs != Set(),
-      val base = { ...ctrl, peers_req_in_progress: ctrl.peers_req_in_progress.mapRemove(request_id) }
-      if (should_dial(node, base, d, true))
-        all {
-          ctrl' = {
-            ...do_dial_register_done_on(base, d, false),
-            dial_queue: base.dial_queue.append({ d: d, ready_at: clock }),
-          },
-          ghost' = { ...ghost,
-            poisoned_dial_queued: ghost.poisoned_dial_queued or foreign_addrs(d) != Set() },
-        }
-      else
-        all { ctrl' = base, ghost' = ghost },
-      rl' = rl,
-      node' = node,
-      clock' = clock,
-    }
+  /// Discovery::handle_peers_response — the outer handler only clears the
+  /// in-progress request; every verified record with at least one address is
+  /// then dialed through add_to_dial_queue, which the model represents by its
+  /// own register + queue steps (handlers/peers_request.rs:167-181, 215-262)
+  action handle_peers_response(request_id: int): bool = all {
+    ctrl.peers_req_in_progress.has(request_id),
+    ctrl' = { ...ctrl,
+      peers_req_in_progress: ctrl.peers_req_in_progress.mapRemove(request_id) },
+    rl' = rl,
+    node' = node,
+    clock' = clock,
+    ghost' = ghost,
   }
 
   /// Discovery::handle_failed_peers_request — retry with backoff, or give up
@@ -941,7 +953,7 @@ module peer_discovery {
   /// dial data an adversary or a peers response can present: any peer id (or
   /// none), any address set including addresses owned by somebody else
   pure val DIAL_DATAS: Set[DialData] =
-    tuples(PEERS.map(p => Some(p)).union(Set(None)),
+    tuples(PEERS.union(Set(NO_PEER)),
            ADDRS.powerset().filter(s => s.size() <= 2),
            Set(false, true))
       .map(t => { peer_id: t._1, listen_addrs: t._2, retry: 0, is_bootstrap: t._3 })
@@ -965,6 +977,13 @@ module peer_discovery {
     {
       nondet peer_id = PEERS.oneOf()
       DiscoveryRateLimiterremove_peer(peer_id)
+    },
+    {
+      nondet max_requests = Set(0, 1, 2, 3, 6).oneOf()
+      nondet max_violations = Set(0, 2, 3).oneOf()
+      nondet rate_window = Set(0, 60000).oneOf()
+      nondet violation_expiry = Set(0, 1, 600000, 3600000).oneOf()
+      DiscoveryRateLimiternew(max_requests, max_violations, rate_window, violation_expiry)
     },
     {
       nondet dial_data = DIAL_DATAS.oneOf()
@@ -1011,9 +1030,7 @@ module peer_discovery {
     },
     {
       nondet request_id = REQ_IDS.oneOf()
-      nondet record_peer = PEERS.oneOf()
-      nondet record_addrs = ADDRS.powerset().filter(s => s.size() == 1).oneOf()
-      handle_peers_response(request_id, record_peer, record_addrs)
+      handle_peers_response(request_id)
     },
     {
       nondet request_id = REQ_IDS.oneOf()
@@ -1107,7 +1124,7 @@ module peer_discovery {
   /// (e.g. by violation expiry) shows up here.
   val rate_limit_admits_at_most_max_per_window: bool =
     ghost.admitted.keys().forall(p =>
-      ghost.admitted.get(p).count <= MAX_REQUESTS_PER_WINDOW)
+      ghost.admitted.get(p).count <= rl.max_requests)
 
   /// A peer is never both an inbound and an outbound peer — the two sets are the
   /// node's accounting of its persistent slots, and double counting would let one

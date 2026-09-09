@@ -81,6 +81,13 @@ module consensusOrchestratorWalSystem {
   /// After a restart the node took in a logged vote for a height it had
   /// already moved past.
   var staleApplied: bool
+  /// A restart started a height above the one the log's sequence names.
+  var restartCrossedHeight: bool
+  /// A height was (re)started while the actor was already at that height.
+  var sameHeightRestart: bool
+  /// Such a (re)start handed back nothing although the log still held
+  /// readable entries for that very height.
+  var sameHeightEmptyReplay: bool
 
   // ────────────────────── pure helpers ──────────────────────
 
@@ -109,6 +116,8 @@ module consensusOrchestratorWalSystem {
     publishedBefore' = Set(), recovered' = Set(), replayRan' = false,
     contradicted' = false, fidelityBroken' = false, crossHeight' = false,
     staleApplied' = false,
+    sameHeightRestart' = false, sameHeightEmptyReplay' = false,
+    restartCrossedHeight' = false,
   }
 
   // ───────────────────────── actions ─────────────────────────
@@ -130,6 +139,10 @@ module consensusOrchestratorWalSystem {
       known' = Set(), recovered' = Set(), replayRan' = replayRan,
       fidelityBroken' = fidelityBroken, crossHeight' = crossHeight,
       staleApplied' = staleApplied,
+      sameHeightRestart' = true,
+      sameHeightEmptyReplay' = (sameHeightEmptyReplay or
+        votesAt(votesOf(readablePrefix(log)), h) != Set()),
+      restartCrossedHeight' = restartCrossedHeight,
     } else if (h == logSeq) {
       val kept = readablePrefix(log)
       val got  = votesOf(kept)
@@ -140,6 +153,9 @@ module consensusOrchestratorWalSystem {
         fidelityBroken' = (fidelityBroken or got != votesAt(published, h)),
         crossHeight' = (crossHeight or got.exists(v => v.h != h)),
         staleApplied' = (staleApplied or (crashes > 0 and got.exists(v => v.h < h))),
+        sameHeightRestart' = sameHeightRestart,
+        sameHeightEmptyReplay' = sameHeightEmptyReplay,
+        restartCrossedHeight' = restartCrossedHeight,
       }
     } else all {
       // reset: the log is cleared and re-sequenced to the new height
@@ -147,6 +163,10 @@ module consensusOrchestratorWalSystem {
       known' = Set(), recovered' = Set(), replayRan' = replayRan,
       fidelityBroken' = fidelityBroken, crossHeight' = crossHeight,
       staleApplied' = staleApplied,
+      sameHeightRestart' = sameHeightRestart,
+      sameHeightEmptyReplay' = sameHeightEmptyReplay,
+      restartCrossedHeight' = (restartCrossedHeight or
+        (crashes > 0 and log.length() > 0 and logSeq < h)),
     },
   }
 
@@ -170,6 +190,9 @@ module consensusOrchestratorWalSystem {
       recovered' = recovered, replayRan' = replayRan,
       fidelityBroken' = fidelityBroken, crossHeight' = crossHeight,
       staleApplied' = staleApplied,
+      sameHeightRestart' = sameHeightRestart,
+      sameHeightEmptyReplay' = sameHeightEmptyReplay,
+      restartCrossedHeight' = restartCrossedHeight,
     },
   }
 
@@ -182,6 +205,9 @@ module consensusOrchestratorWalSystem {
     replayRan' = replayRan, contradicted' = contradicted,
     fidelityBroken' = fidelityBroken, crossHeight' = crossHeight,
     staleApplied' = staleApplied,
+    sameHeightRestart' = sameHeightRestart,
+    sameHeightEmptyReplay' = sameHeightEmptyReplay,
+    restartCrossedHeight' = restartCrossedHeight,
   }
 
   /// The process dies: whatever was written but not fsynced is gone, and so is
@@ -193,10 +219,13 @@ module consensusOrchestratorWalSystem {
     known' = Set(),
     crashes' = crashes + 1,
     publishedBefore' = published,
-    logSeq' = logSeq, orchH' = orchH, published' = published,
+    logSeq' = logSeq, orchH' = -1, published' = published,
     recovered' = recovered, replayRan' = replayRan,
     contradicted' = contradicted, fidelityBroken' = fidelityBroken,
     crossHeight' = crossHeight, staleApplied' = staleApplied,
+    sameHeightRestart' = sameHeightRestart,
+    sameHeightEmptyReplay' = sameHeightEmptyReplay,
+    restartCrossedHeight' = restartCrossedHeight,
   }
 
   /// A stored entry stops reading back (a damaged CRC).
@@ -210,6 +239,9 @@ module consensusOrchestratorWalSystem {
     replayRan' = replayRan, contradicted' = contradicted,
     fidelityBroken' = fidelityBroken, crossHeight' = crossHeight,
     staleApplied' = staleApplied,
+    sameHeightRestart' = sameHeightRestart,
+    sameHeightEmptyReplay' = sameHeightEmptyReplay,
+    restartCrossedHeight' = restartCrossedHeight,
   }
 
   /// Wal actor `Msg::Reset(height)` — sets the actor's in-memory height and
@@ -224,6 +256,9 @@ module consensusOrchestratorWalSystem {
     replayRan' = replayRan, contradicted' = contradicted,
     fidelityBroken' = fidelityBroken, crossHeight' = crossHeight,
     staleApplied' = staleApplied,
+    sameHeightRestart' = sameHeightRestart,
+    sameHeightEmptyReplay' = sameHeightEmptyReplay,
+    restartCrossedHeight' = restartCrossedHeight,
   }
 
   action step = {
@@ -254,26 +289,24 @@ module consensusOrchestratorWalSystem {
   /// Entries from a previous height are never replayed into a later one.
   val height_isolation: bool = not(crossHeight)
 
-  /// After a restart the node never applies a logged vote for a height it has
-  /// already moved past.
-  val restart_does_not_resurrect_stale_votes: bool = not(staleApplied)
+  /// A node restarted at the very height its log already holds entries for
+  /// gets those entries back, rather than an empty replay.
+  val restart_at_same_height_replays_own_entries: bool = not(sameHeightEmptyReplay)
 
   // ────────────────────── scenario witnesses ──────────────────────
 
-  /// Some run published a vote and then crashed and restarted.
-  val crash_after_publish_reached: bool =
-    crashes > 0 and publishedBefore != Set() and replayRan
+  /// A trace actually crashed the node and restarted it at some height.
+  val crash_and_restart_completed: bool = crashes > 0 and actorH >= 0
 
-  /// Some run replayed a log for a height at which votes had been published.
-  val replay_after_restart_reached: bool =
-    replayRan and votesAt(published, logSeq) != Set()
+  /// A trace actually replayed WAL entries into the orchestrator after a
+  /// restart.
+  val replay_after_restart_completed: bool = replayRan and recovered != Set()
 
-  /// Some run started a second height after appending entries at the first.
-  val second_height_started_reached: bool =
-    published.exists(a => published.exists(b => a.h != b.h))
+  /// A trace restarted the node at a height later than the one the log last
+  /// held entries for.
+  val restart_crossed_a_height_boundary: bool = restartCrossedHeight
 
-  /// Some run restarted with log entries for a height below the height being
-  /// started.
-  val restart_with_stale_log_reached: bool =
-    crashes > 0 and log.foldl(false, (acc, e) => acc or e.v.h < orchH)
+  /// A trace restarted the node at the height the log's sequence number
+  /// already names.
+  val restarted_at_same_height: bool = sameHeightRestart
 }

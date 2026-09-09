@@ -20,7 +20,7 @@ module walCore {
   pure val MAX_ENTRY_SIZE: int = 1073741824
 
   /// WAL file paths the model distinguishes.
-  pure val PATHS: Set[int] = 0.to(5)
+  pure val PATHS: Set[int] = 0.to(9)
 
   /// The path the engine's WAL actor owns.
   pure val ACTOR_PATH: int = 0
@@ -28,9 +28,11 @@ module walCore {
   /// Consensus heights the model explores.
   pure val HEIGHTS: Set[int] = 0.to(3)
 
-  /// Entry payload sizes, including the two past MAX_ENTRY_SIZE.
+  /// Entry payload sizes, including the sizes the stress suite writes and the
+  /// two past MAX_ENTRY_SIZE.
   pure val SIZES: Set[int] =
-    0.to(16).union(Set(56, MAX_ENTRY_SIZE, MAX_ENTRY_SIZE + 1))
+    0.to(16).union(Set(56, 117, 1024, 10240, 102400, 512000, 1048576, 10485760,
+                       MAX_ENTRY_SIZE, MAX_ENTRY_SIZE + 1))
 
   /// Entry indices `truncate` and the adversary may target — one past the end
   /// is included so the `from_entry >= len` no-op branch is falsifiable.
@@ -235,6 +237,17 @@ module wal {
       if (not(ok)) all {
         logs' = logs,
         ghost' = { ...ghost, openRan: true, openRejected: true },
+      } else if (not(lg.created) and lg.entries.length() == 0 and len > 0) all {
+        // A log file another process left on disk: the very first open scans
+        // `len` intact entries this model never saw written (crashes.rs:242).
+        logs' = logs.put(path, { ...lg, created: true,
+                                 entries: range(0, len).foldl(List(), (acc, i) =>
+                                   acc.append({ payload: ghost.nextId + i, dataLength: 0,
+                                                crc: true, framed: true, torn: false,
+                                                height: lg.sequence })),
+                                 flushed: len }),
+        ghost' = { ...ghost, nextId: ghost.nextId + len,
+                   openRan: true, openRejected: false, openTruncated: 0 },
       } else all {
         // The scan keeps a prefix; how long a prefix also depends on damage
         // the model does not track byte for byte, so `len` pins it.
@@ -410,17 +423,17 @@ module wal {
         val stop = firstUnreadable(lg.entries)
         all {
           actor' = { ...actor, height: height },
+          // `fetch_entries` (thread.rs:215-233) reports the damaged entry and
+          // KEEPS GOING: the entries are length-framed, so the ones behind a
+          // bad payload still read back. Nothing is truncated, and no later
+          // intact entry is lost.
           ghost' = { ...ghost,
                      startedHeightReplayed: true,
                      replayRan: true,
                      preReplayAll: payloads(lg.entries),
-                     replayed: replayedPayloads(lg.entries),
+                     replayed: intactPayloads(lg.entries),
                      replayErrorAt: stop,
-                     replayTruncatedAt: stop,
-                     replayLostLaterIntact: ghost.replayLostLaterIntact or
-                       (stop >= 0 and
-                         not(intactPayloadsAfter(lg.entries, stop)
-                               .subseteq(intactPayloads(lg.entries.take(stop))))) },
+                     replayTruncatedAt: -1 },
         }
       } else all {
         actor' = { ...actor, height: height },
@@ -482,6 +495,17 @@ module wal {
                  dumpMismatch: ghost.dumpMismatch or
                    replayedPayloads(lg.entries).size() != lg.entries.length() },
     },
+  }
+
+  /// Wal actor `pre_start` (wal.rs:279-300) — a freshly spawned actor opens the
+  /// log, spawns its blocking thread, and starts at height ZERO regardless of
+  /// the sequence already on disk. This is what makes a restart's first
+  /// `StartedHeight` consult the log instead of short-circuiting.
+  action Wal_actor_pre_start: bool = all {
+    logs.get(ACTOR_PATH).created,
+    logs' = logs,
+    actor' = { height: 0, threadAlive: true },
+    ghost' = ghost,
   }
 
   // ─────────── the consensus call site that consumes the reply ───────────
@@ -600,7 +624,9 @@ module wal {
   action step = any {
     { nondet path = PATHS.oneOf()
       nondet ok = Set(false, true).oneOf()
-      nondet len = 0.to(scanLimit(logs.get(path).entries) + 1).oneOf()
+      nondet len = 0.to(scanLimit(logs.get(path).entries) + 1)
+        // A first open may discover a log another process wrote.
+        .union(if (logs.get(path).created) Set() else LENS).oneOf()
       Logopen(path, ok, len) },
     { nondet path = PATHS.oneOf()
       nondet ok = Set(false, true).oneOf()
@@ -643,6 +669,7 @@ module wal {
       Wal_actor_MsgAppend(height) },
     Wal_actor_MsgFlush,
     Wal_actor_MsgDump,
+    Wal_actor_pre_start,
     { nondet recovering = Set(false, true).oneOf()
       consensus_wal_append_and_broadcast(recovering) },
     { nondet path = PATHS.oneOf()
@@ -657,7 +684,8 @@ module wal {
     // The engine owns exactly one log; these arms re-offer the operations that
     // build up its state so simulation reaches the replay scenarios.
     { nondet ok = Set(false, true).oneOf()
-      nondet len = 0.to(scanLimit(logs.get(ACTOR_PATH).entries) + 1).oneOf()
+      nondet len = 0.to(scanLimit(logs.get(ACTOR_PATH).entries) + 1)
+        .union(if (logs.get(ACTOR_PATH).created) Set() else LENS).oneOf()
       Logopen(ACTOR_PATH, ok, len) },
     { nondet dataLength = SIZES.oneOf()
       val n = logs.get(ACTOR_PATH).entries.length()
@@ -750,8 +778,10 @@ module wal {
   /// The open scan deleted entries whose CRC was still valid.
   val open_dropped_intact_entries: bool = not(open_keeps_intact_entries)
 
-  /// A replay stopped at an unreadable entry and truncated the log there.
-  val replay_stopped_at_unreadable_entry: bool = ghost.replayTruncatedAt >= 0
+  /// A replay ran into an unreadable entry and reported it (thread.rs:215-233
+  /// keeps going past it; nothing is truncated).
+  val replay_stopped_at_unreadable_entry: bool =
+    ghost.replayRan and ghost.replayErrorAt >= 0
 
   /// A replay's truncation discarded later entries that still read back.
   val replay_discarded_later_intact_entries: bool =
