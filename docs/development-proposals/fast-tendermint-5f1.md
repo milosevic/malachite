@@ -142,8 +142,17 @@ hard startup check that all nodes agree. Classic stays the default. Never a runt
 ## 2. Component-by-component impact
 
 Studio has `round-state-machine`, `vote-keeper`, `consensus-orchestrator`, `wal` and `value-sync` at
-`ready`; `driver` at `investigate`; `message-codec` at `wire`. Their confirmed behavior cards and
-property names are the acceptance checklist below.
+`ready`; `driver` at `investigate`; `message-codec` at `wire`.
+
+**The acceptance checklist is the model's PROPERTIES and OBSERVATIONS, not the behavior deck.**
+On 2026-09-10 Zarko reverted every behavior card to `not_sure`, on the grounds that the verdicts had
+not been properly reflected on. Card text is therefore *unverified prose* in this document — quoted
+only to name a topic, never as established intent. What still stands is each component's confirmed
+model: `propertiesConfirmed` and `observationsConfirmed` are separate artifacts that passed the
+confirm-model gate. Those are what we hold ourselves to.
+
+For the fast protocol, intent comes from **Algorithm 1** (Stage 0), not from cards describing the
+current code.
 
 ### 2.1 `core-types` — thresholds, certificates, proposals
 
@@ -183,7 +192,8 @@ Properties needing re-derivation: `polka_value_needs_quorum`,
 `skip_round_only_from_future_rounds` (retires). Carrying over: `tally_matches_voters`,
 `tally_never_overflows`, `evidence_is_real_equivocation`, `evidence_bounded_per_validator`.
 
-The confirmed goal *"PrecommitValue outranks SkipRound in a future round"* retires with `SkipRound`.
+The card *"PrecommitValue outranks SkipRound in a future round"* names a topic that retires with
+`SkipRound`; it carries no verdict, so nothing is being overturned.
 
 ### 2.3 `core-state-machine` — collapse the steps
 
@@ -205,14 +215,16 @@ holding the propose decision until it fires or `valid` advances; or model it as 
 with a pending flag and re-evaluating on each `2f+1` observation. This is the main **design question
 Studio's model should settle before Rust is written.**
 
-Surviving confirmed behaviors, to re-check rather than rewrite: *non-proposer never emits a
-proposal*; *decision output carries the decided proposal's round*; *round never moves backwards*;
-*proposal round mismatch never panics*. Properties `only_proposer_emits_proposal`,
+Surviving model properties, to re-check rather than rewrite: `only_proposer_emits_proposal`,
 `decision_is_never_overwritten`, `commit_step_is_terminal`, `round_never_moves_backwards`,
 `decision_output_round_matches_state` carry over; `timeout_scheduled_at_most_once_per_round` narrows
-to two kinds. The goal *"locked node unlocks for an older polka"* changes meaning — with the merge
-there is no unlock, and the intent becomes L28's `valid_p.round ≤ vr ∨ valid_p.value = id(v)`.
-Expect that card retracted and replaced.
+to two kinds.
+
+The observation `unlocked_for_older_polka` is the one whose *meaning* changes: with `locked` and
+`valid` merged there is no unlock, and the corresponding rule becomes L28's
+`valid_p.round ≤ vr ∨ valid_p.value = id(v)`. Expect that observation retired and replaced when the
+model is re-derived — it is a confirmed observation, so this is a real change to the contract, not a
+card edit.
 
 ### 2.4 `core-driver` — multiplexing
 
@@ -298,10 +310,12 @@ those lines. Not obtained: the model-checked invariant names and configuration.
 **Repository:** all file paths, `ThresholdParams` and its plumbing, the `Step`/`Input` enums, the
 `mux.rs` helper set, `VoteType`, `quint-specs` inventory — all verified against the branch.
 
-**Studio:** confirmed behavior cards and property names, from models `ready` on
-`round-state-machine`, `vote-keeper`, `consensus-orchestrator`, `wal`, `value-sync`. Every bridge
-check in the interaction map is currently `unchecked`, so the cross-component requirements quoted
-here are stated intent, not evidence.
+**Studio:** confirmed model **properties and observations** from the components at `ready`
+(`round-state-machine`, `vote-keeper`, `consensus-orchestrator`, `wal`, `value-sync`).
+
+**Explicitly NOT relied on:** behavior-deck verdicts — all reverted to `not_sure` on 2026-09-10, so
+no card carries a standing human decision. Also not relied on: the interaction map's bridge checks,
+every one of which is `unchecked`. Both are topics worth attention, neither is evidence.
 
 **Deliberately not used:** the authors' Quint specification and Malachite's `test/mbt` ITF-replay
 suite. Requirements input and inspiration respectively, per the method decision at the top.
