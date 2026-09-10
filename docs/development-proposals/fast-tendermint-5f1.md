@@ -256,16 +256,36 @@ distinction plus certificate semantics.
 
 ## 3. Staged plan
 
-**Stage 1 — thresholds, no behavior change.** Add `decision`, repurpose `quorum`, remove `honest`
-from the fast params; make every `signing/src/ext.rs` entry point name its threshold; extend the
-corner-case tests. Classic behavior bit-identical — reviewable as a pure refactor.
+**Stage 1 and Stage 2 contend for the same files — Stage 2 goes FIRST.** Stage 1 edits
+`core-types/src/threshold.rs` and `signing/src/ext.rs`; Stage 2's Studio pipelines instrument and
+compile exactly those crates. Editing them while a component is mid-`oracle` causes drift and
+invalidates the run. So the baseline models are built first, then the threshold refactor lands, then
+the affected components are re-synced. The ordering below reflects that.
 
-**Stage 2 — Studio derives the model.** Set up the components Studio does not yet have
-(`core-types-domain` first — the threshold arithmetic is the load-bearing change — then `driver` to
-`ready`, then `signing`, `equivocation-detection`), and have Studio produce the fast-protocol model
-against the code. Model-check agreement, the L42/L36 intersection argument, termination, and settle
-the `WaitForValid` design question **before Rust**. Use the authors' spec as a cross-check on
-requirements, never as a source to merge.
+**Stage 2 (first) — Studio derives the baseline models.** Set up the components Studio does not yet
+have: `core-types-domain` (the threshold arithmetic is the load-bearing change), then `driver` to
+`ready`, then `signing` and `equivocation-detection`. These model the code **as it is** — classic
+`n > 3f` — and are the baseline against which the fast-protocol change is later detected as drift.
+Then have Studio derive the fast-protocol model: check agreement, the L42/L36 intersection argument,
+termination, and settle the `WaitForValid` design question **before Rust**. Use the authors' spec as
+a cross-check on requirements, never as a source to merge.
+
+Two operational constraints, learned the hard way on 2026-09-10:
+
+- **Studio serialises oracle access.** Components set up in parallel queue behind one another for
+  the oracle slot, and a run that fails to terminate blocks every other component silently — the
+  blocked one simply looks slow. Set up components in small batches, and when a pipeline appears
+  stalled, check for a long-running `quint-rs oracle-daemon` holding the slot before assuming the
+  worker is stuck.
+- **Components that share files cannot be parallelised.** `core-types-domain`'s instrumentation
+  needs sites in the `signing` crate, so running both setups at once had two workers editing the
+  same crate. Sequence any components whose `paths` or instrumentation overlap.
+
+**Stage 1 (second) — thresholds, no behavior change.** Add `decision`, repurpose `quorum`, remove
+`honest` from the fast params; make every `signing/src/ext.rs` entry point name its threshold;
+extend the corner-case tests to the 4/5 and 2/5 boundaries. Classic behavior bit-identical —
+reviewable as a pure refactor. Run it when no component is mid-`oracle` on `core-types`, `test` or
+`signing`, then `restart_component` (no stage) on the affected components to re-sync.
 
 **Stage 3 — vote keeper.** Two-thresholds-on-one-tally, `SkipRound` removal. Highest-risk unit;
 do it before the state machine.
