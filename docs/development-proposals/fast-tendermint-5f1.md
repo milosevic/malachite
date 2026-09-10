@@ -4,327 +4,304 @@ Implementation plan for adapting Malachite to the two-step, `n > 5f` variant of 
 
 **Reference:** Preston Vander Vos, Daniel Cason, *"Fast Tendermint: Speeding Up a Foundational
 Consensus Protocol"*, [arXiv:2608.13434](https://arxiv.org/abs/2608.13434) (13 Aug 2026).
-The paper ships a Quint specification, which is directly relevant to us — see
-[Stage 0](#stage-0--pin-the-specification) below.
 
-Target branch: `zm_5f+1` (cut from `main` @ `72143f6c`).
+**Method decision (Zarko, 2026-09-10).** The authors publish a Quint specification at
+`github.com/circlefin/formal-tendermint/tree/master/fast-tendermint`. We do **not** adopt or
+reconcile it. It serves as *requirements and specification input only* — a second opinion on what
+the protocol must do. The model we build against our code is produced by **Quint Studio**, and
+Studio also drives test generation. Malachite's existing `test/mbt` ITF-replay machinery is
+**inspiration only**; it is not the instrument for this work.
 
-> **Status: draft plan, not yet validated.** The protocol summary below was extracted from the
-> arXiv HTML rendering, not from a line-by-line read of the PDF. Every pseudocode rule and
-> threshold cited here must be re-checked against the paper before code is written. Stage 0
-> exists for exactly that.
-
----
-
-## 1. What the protocol changes
-
-Classic Tendermint: `n > 3f`, three communication steps (propose → prevote → precommit), and two
-pieces of carried-over round state, `lockedValue/lockedRound` and `validValue/validRound`.
-
-Fast Tendermint: `n > 5f`, **two** communication steps in the good case, achieved by
-
-1. **collapsing prevote and precommit into a single voting step**, and
-2. **merging `locked` and `valid` into one `valid: (round, valueId)` pair**.
-
-The good case is: proposer broadcasts a proposal → everyone votes once → a node decides as soon as
-it has seen the proposal plus `n − f` votes for it.
-
-Two thresholds now act on that *single* vote tally, in the *same* round:
-
-| Threshold | Uniform-power form (`n = 5f+1`) | Fraction of total power | Role |
-| --- | --- | --- | --- |
-| `n − f` | `4f+1` | > 4/5 | **decide**; also advances the round on "any value" (slow path) |
-| `2f+1` | `2f+1` | > 2/5 | **set `valid`**; justifies a re-proposal |
-| `f+1` | `f+1` | > 1/5 | round skip (unchanged in role) |
-
-Derivation of the fractions, for `n = 5f+1`: `4f+1 > (4/5)(5f+1) = 4f+0.8`; `2f+1 > (2/5)(5f+1) =
-2f+0.4`; `f+1 > (1/5)(5f+1) = f+0.2`. All three map cleanly onto Malachite's existing
-"strictly greater than numerator/denominator of total voting power" representation.
-
-Sketch of the rules as extracted (to be confirmed in Stage 0):
-
-- **Propose** — proposer sends `⟨PROPOSAL, round, v, validRound⟩`; `validRound = −1` for a fresh
-  value, otherwise it re-proposes `valid.value` and carries `valid.round`.
-- **Vote on a fresh proposal** — on `⟨PROPOSAL, r, v, −1⟩`, if `validate(v)` and
-  (`valid.round = −1` or `valid.value = id(v)`), vote for `id(v)`.
-- **Vote on a re-proposal** — accept `⟨PROPOSAL, r, v, vr⟩` when `2f+1` votes for `id(v)` were seen
-  in round `vr` and `vr ≥ valid.round`.
-- **Observe** — on `2f+1` votes for `id(v)` in the current round, set `valid ← (round, id(v))`.
-- **Decide** — on the proposal for `v` plus `n − f` votes for `id(v)` in the same round, decide `v`.
-- **Liveness timing** — the paper states `τ_Precommit > 2Δ` and `τ_Propose > 2Δ + τ_Precommit`.
-
-Safety rests on: once `id(v)` has `n − f` votes in round `r`, no other value can reach `2f+1` votes
-in any round `r' ≥ r` (the paper's Lemma 2). That is the `n > 5f` quorum-intersection argument, and
-it is the single load-bearing claim the whole change depends on.
+Target branch: `zm_5f+1` (based on `zm_studio_v0.8.0` + `quint-studio-main`, containing v0.8.0).
 
 ---
 
-## 2. Compatibility: this is a fork, not a flag
+## Stage 0 — pin the specification — **DONE**
 
-The two protocols are **not** interoperable, at three separate levels:
+Algorithm 1 transcribed from the paper. State: `round_p`, `step_p ∈ {propose, precommit}`,
+`decision_p`, and `valid_p := (round, id(value))` initialised to `(-1, nil)`.
 
-- **Resilience** — a 3f+1 validator set is unsafe under the fast rules.
-- **Wire** — the vote step count and the certificate quorum sizes both differ.
-- **Certificates** — a commit certificate carrying `2f+1` power does not prove a fast-path decision,
-  and one carrying `n − f` power is not what a classic node expects. Sync between the two is
-  therefore unsound in both directions.
+```
+ 6: function StartRound(round)
+ 7:   round_p ← round
+ 8:   step_p ← propose
+ 9:   if proposer(round_p) = p then
+10:      if round_p > 0 then
+11:         WaitForValid(timeoutPrecommit(round_p))
+12:      if valid_p.value = nil then
+13:         proposal ← getValue()          ⊳ Fresh proposals carry a full value v
+14:      else
+15:         proposal ← valid_p.value       ⊳ Re-proposals carry a value identifier id(v)
+16:      broadcast ⟨PROPOSAL, round_p, proposal, valid_p.round⟩
+17:   else
+18:      schedule OnTimeoutPropose(round_p) after timeoutPropose(round_p)
 
-**Recommendation:** treat Fast Tendermint as a distinct protocol mode selected at genesis and
-resolved at compile time or at node construction — not a runtime-togglable config value, and never
-something that can differ between nodes in one validator set. Concretely: keep classic Tendermint
-as the default path and gate the fast path behind a Cargo feature plus an explicit
-`ConsensusProtocol` field on the params, with a hard startup check that the two agree.
+20: upon ⟨PROPOSAL, round_p, v, -1⟩ from proposer(round_p) while step_p = propose do
+21:   if validate(v) ∧ (valid_p.round = -1 ∨ valid_p.value = id(v)) then
+22:      broadcast ⟨PRECOMMIT, round_p, id(v)⟩
+23:   else
+24:      broadcast ⟨PRECOMMIT, round_p, nil⟩
+25:   step_p ← precommit
 
----
+27: upon ⟨PROPOSAL, round_p, id(v), vr⟩ from proposer(round_p) with 0≤vr<round_p
+        AND 2f+1 ⟨PRECOMMIT, vr, id(v)⟩ while step_p = propose do
+28:   if valid_p.round ≤ vr ∨ valid_p.value = id(v) then
+29:      if valid_p.round ≤ vr then
+30:         valid_p ← (vr, id(v))
+31:      broadcast ⟨PRECOMMIT, round_p, id(v)⟩
+32:   else
+33:      broadcast ⟨PRECOMMIT, round_p, nil⟩
+34:   step_p ← precommit
 
-## 3. Component-by-component impact
+36: upon 2f+1 ⟨PRECOMMIT, round_p, id(v)⟩ with round_p > valid_p.round do
+37:   valid_p ← (round_p, id(v))
 
-Studio has `round-state-machine`, `vote-keeper`, `consensus-orchestrator`, `wal` and `value-sync`
-at `ready`, and `driver` in progress. The confirmed behaviors and properties on those components
-are what this change has to renegotiate, so they double as the acceptance checklist.
+39: upon n-f ⟨PRECOMMIT, r, *⟩ for the first time with r ≥ round_p do
+40:   schedule OnTimeoutPrecommit(r) after timeoutPrecommit(r)
 
-### 3.1 `core-types` — thresholds and certificates
+42: upon ⟨PROPOSAL, r, v, -1⟩ from proposer(r) AND n-f ⟨PRECOMMIT, r', id(v)⟩ do
+43:   decision_p ← v
 
-`code/crates/core-types/src/threshold.rs`
+45: function WaitForValid(timeout)   ⊳ Run by the proposer of rounds > 0
+46:   while (valid_p.round < round_p-1) ∧ !timeout.elapsed() do
+47:      if 2f+1 ⟨PRECOMMIT, r, id(v)⟩ with r > valid_p.round then
+48:         valid_p ← (r, id(v))
 
-`ThresholdParams` today carries exactly **two** params:
+50: function OnTimeoutPropose(round)
+51:   if round = round_p ∧ step_p = propose then
+52:      broadcast ⟨PRECOMMIT, round_p, nil⟩
+53:      step_p ← precommit
 
-```rust
-pub struct ThresholdParams {
-    pub quorum: ThresholdParam, // 2f+1, i.e. new(2, 3)
-    pub honest: ThresholdParam, // f+1,  i.e. new(1, 3)
-}
+55: function OnTimeoutPrecommit(round)
+56:   if round ≥ round_p ∧ decision_p = nil then
+57:      StartRound(round+1)
 ```
 
-Fast Tendermint needs **three** distinct thresholds simultaneously. Add a third field (working name
-`decision` / `n − f`), and provide a `ThresholdParams::fast()` constructor with
-`decision = new(4,5)`, `quorum = new(2,5)`, `honest = new(1,5)`.
+### Five findings that change the plan
 
-The good news: `threshold_params` is already plumbed as data — `Params<Ctx>` →
-`core-consensus/src/state.rs:75` → `Driver::new` (`core-driver/src/driver.rs:87`) →
-`VoteKeeper::new` (`driver.rs:90`, `driver.rs:146`). Nothing hardcodes 2/3 outside `threshold.rs`.
-Every current call site passes `ThresholdParams::default()`, so introducing a second constructor is
-additive.
+**1. There are only TWO thresholds, and `f+1` disappears entirely.**
 
-Boundary conditions need the same treatment the existing `threshold_params_corner_cases` test gives
-2/3: the 4/5 and 2/5 boundaries must be **not met** at exact equality. This is already flagged as an
-unchecked bridge check in the interaction map — *"`ThresholdParam::is_met` … treats the exact 2/3
-boundary as not met"* — and the fast variant makes it load-bearing twice over.
+| Threshold | Uniform form (`n=5f+1`) | Fraction of total power | Used at |
+| --- | --- | --- | --- |
+| `n − f` | `4f+1` | > 4/5 | L39 arm precommit timeout (round advance); L42 decide |
+| `2f+1` | `2f+1` | > 2/5 | L27 justify re-proposal; L36 set `valid`; L47 in WaitForValid |
 
-`code/crates/core-types/src/certificate.rs`
+Derivation for `n = 5f+1`: `4f+1 > (4/5)(5f+1) = 4f+0.8`; `2f+1 > (2/5)(5f+1) = 2f+0.4`.
 
-- `CommitCertificate` must be verified at `n − f`, not `quorum`.
-- `PolkaCertificate` becomes the *re-proposal justification* certificate at `2f+1`. Its name stops
-  matching its meaning; consider renaming to something step-neutral.
-- `signing/src/ext.rs` has ~10 verification entry points taking `ThresholdParams`; each needs to say
-  *which* threshold it verifies against, rather than defaulting to `quorum`.
+Tendermint's `f+1` "one correct process in a higher round" rule is **removed**, deliberately. The
+paper: *"for the sake of safety, the observation rule needs to capture valid values before a process
+moves to a higher round. For this reason, the quorum any rule, with an n−f quorum, is the only
+allowed path to skip rounds."* A lagging process catches up only via L39.
 
-`code/crates/core-types/src/vote.rs`
+**2. `SkipRound` is deleted, not reparameterised.** This is a behavioral removal in Malachite, not a
+threshold tweak: `VoteKeeper::Output::SkipRound`, the `honest` threshold param, `Input::SkipRound`,
+and the `EnterRoundCertificate` / `RoundCertificateType` machinery all lose their fast-path role.
+Round advance becomes purely "n−f precommits for any value at `r ≥ round_p` → arm
+`OnTimeoutPrecommit(r)`".
 
-`VoteType` is `{ Prevote, Precommit }`. The cheapest sound option is to **keep the enum and use only
-`Precommit`** on the fast path — the single voting step is semantically a precommit, this keeps the
-codec and WAL entry shapes untouched, and a fast node that ever receives a `Prevote` can reject it
-as malformed. Adding a third variant would ripple through every codec impl (proto, JSON, Borsh) for
-no gain.
+**3. `WaitForValid` is a genuinely new mechanism with no Malachite analogue.** The proposer of any
+round > 0 waits — bounded by `timeoutPrecommit` — until it has learned a `valid_p` from round
+`round_p - 1`, *before* it decides whether to propose fresh or re-propose. Malachite has nothing
+like this: today `StartRound` immediately emits `GetValueAndScheduleTimeout` or re-proposes from
+`valid`. This reorders the propose path and is new work, not a modification.
 
-### 3.2 `core-votekeeper` — the structural change
+**4. The decision rule's two rounds can differ.** L42 wants a *fresh* proposal (`validRound = -1`)
+from round `r` **plus** `n−f` precommits from round `r'`, and `r ≠ r'` is allowed. Malachite's
+`Input::ProposalAndPrecommitValue` couples proposal and precommits within one round. Two
+consequences: the fresh proposal is what establishes `validate(v)` (a re-proposal carries only
+`id(v)` and cannot be decided on alone), so the *original* fresh proposal must be retained across
+rounds; and the commit certificate is a cross-round object.
 
-This is the hardest part of the change, and it is **not** a parameter swap.
+**5. Re-proposals carry only `id(v)`, fresh proposals carry the full value.** Explicit in the L13/L15
+comments. Malachite's `Proposal` always carries `Ctx::Value`, so the proposal type (and its codec)
+gains a value-or-id distinction. This also settles an earlier open question: `valid_p` holds the
+**id**, not the value — the full value is recovered from the retained fresh proposal.
 
-Today `threshold_to_output` (`keeper.rs:585-637`) maps one vote type in one round to **at most one**
-`Threshold`, and `emit_at_most_once_per_round` guarantees each output fires once. Fast Tendermint
-needs **two different thresholds over the same precommit tally in the same round** — a `2f+1`
-"set `valid`" event *and* a later `n − f` "decide" event — and the `2f+1` event must not swallow the
-`n − f` one.
+Two earlier guesses now confirmed: `step_p ∈ {propose, precommit}` means the surviving vote step is
+literally named *precommit*, so reusing `VoteType::Precommit` and never emitting `Prevote` is
+faithful rather than merely convenient; and `τ_Precommit > 2Δ`, `τ_Propose > 2Δ + τ_Precommit`.
 
-Required changes:
+Not obtained: the paper does not name the invariants it model-checked, nor the configuration
+(process count, rounds) it checked at. Since we are deriving our own model in Studio, this does not
+block us.
 
-- Extend `Threshold` (or `Output`) so `2f+1`-for-value and `n−f`-for-value are distinct outputs, e.g.
-  `Output::VoteValue(v)` (at `2f+1`) and `Output::DecisionQuorum(v)` (at `n − f`), with `Any` also
-  needing an `n − f` flavour for the slow-path round advance.
-- Both must be independently latched, so crossing `2f+1` and later `n − f` in the same round yields
-  two emissions. The existing per-round emitted-output set generalizes to this, but the
-  `emit_at_most_once_per_round` property must be restated per (round, threshold) rather than per
-  (round, vote type).
-- `PolkaAny`/`PolkaNil`/`PolkaValue` become dead on the fast path.
+---
 
-Studio properties that need re-derivation, not just re-running: `polka_value_needs_quorum`,
+## 1. Compatibility: this is a fork, not a flag
+
+Not interoperable with classic Tendermint at three levels — resilience (a 3f+1 set is unsafe under
+the fast rules), wire (vote step count and quorum sizes differ), and certificates (a `2f+1` commit
+certificate does not prove a fast-path decision; an `n−f` one is not what a classic node expects,
+making sync unsound in both directions).
+
+**Recommendation:** genesis-selected mode, resolved at compile time or node construction, with a
+hard startup check that all nodes agree. Classic stays the default. Never a runtime toggle.
+
+---
+
+## 2. Component-by-component impact
+
+Studio has `round-state-machine`, `vote-keeper`, `consensus-orchestrator`, `wal` and `value-sync` at
+`ready`; `driver` at `investigate`; `message-codec` at `wire`. Their confirmed behavior cards and
+property names are the acceptance checklist below.
+
+### 2.1 `core-types` — thresholds, certificates, proposals
+
+`core-types/src/threshold.rs`. `ThresholdParams` today is `{quorum: 2/3, honest: 1/3}`. The fast
+variant needs `{decision: 4/5, quorum: 2/5}` and **no honest param**. So: add a `decision` field,
+repurpose `quorum`, and make the absence of `honest` explicit rather than leaving a dead 1/5 value
+that invites a resurrected `SkipRound`. `threshold_params` is already plumbed as data
+(`Params<Ctx>` → `core-consensus/src/state.rs:75` → `Driver::new` at `core-driver/src/driver.rs:87`
+→ `VoteKeeper::new` at `:90` and `:146`), and nothing hardcodes 2/3 outside `threshold.rs`.
+
+Extend the `threshold_params_corner_cases` test to the 4/5 and 2/5 boundaries: both must be **not
+met** at exact equality. The interaction map already flags this as an unchecked bridge check for
+2/3; the fast variant makes it load-bearing twice.
+
+`certificate.rs`: `CommitCertificate` verifies at `n−f` and becomes **cross-round** (finding 4).
+`PolkaCertificate` becomes the `2f+1` re-proposal justification — rename to something step-neutral.
+`signing/src/ext.rs` has ~10 verification entry points taking `ThresholdParams`; each must name
+which threshold it checks instead of defaulting to `quorum`.
+
+`vote.rs`: keep `VoteType` and use only `Precommit` (per Stage 0). A fast node receiving a `Prevote`
+rejects it as malformed. `proposal.rs`: needs the full-value vs. `id(v)` distinction from finding 5.
+
+### 2.2 `core-votekeeper` — the structural change
+
+Still the hardest part, and confirmed structural. `threshold_to_output` (`keeper.rs:585-637`) maps
+one vote type in one round to **at most one** `Threshold`, latched by `emit_at_most_once_per_round`.
+The fast protocol needs **two thresholds over the same precommit tally in the same round** — `2f+1`
+(L36, set `valid`) and `n−f` (L39/L42) — independently latched, the first not swallowing the second.
+
+Changes: distinct outputs for `2f+1`-for-value vs `n−f`-for-value, plus an `n−f`-for-any (L39);
+independent latching, so `emit_at_most_once_per_round` is restated per (round, threshold) rather
+than per (round, vote type); `PolkaAny`/`PolkaNil`/`PolkaValue` and **`SkipRound`** all die.
+
+Properties needing re-derivation: `polka_value_needs_quorum`,
 `polka_any_reported_on_prevote_quorum`, `precommit_value_reported_on_quorum`,
-`precommit_nil_distinguishable_from_split`, `emit_at_most_once_per_round`.
+`precommit_nil_distinguishable_from_split`, `emit_at_most_once_per_round`,
+`skip_round_only_from_future_rounds` (retires). Carrying over: `tally_matches_voters`,
+`tally_never_overflows`, `evidence_is_real_equivocation`, `evidence_bounded_per_validator`.
 
-Properties that carry over unchanged: `tally_matches_voters`, `tally_never_overflows`,
-`evidence_is_real_equivocation`, `evidence_bounded_per_validator`,
-`skip_round_only_from_future_rounds`.
+The confirmed goal *"PrecommitValue outranks SkipRound in a future round"* retires with `SkipRound`.
 
-Also confirm the goal *"PrecommitValue outranks SkipRound in a future round"* still holds when there
-are two value thresholds competing with `SkipRound`.
+### 2.3 `core-state-machine` — collapse the steps
 
-### 3.3 `core-state-machine` — collapse the steps
+`Step` becomes `Unstarted → Propose → Precommit → Commit`. `State` replaces the `locked`/`valid`
+pair with a single `valid: Option<RoundValue<ValueId>>` holding the **id**.
 
-`code/crates/core-state-machine/src/{state,input,output,state_machine}.rs`
+`Input`: drop `PolkaAny`, `PolkaNil`, `ProposalAndPolkaCurrent`, `TimeoutPrevote`, `SkipRound`.
+`ProposalAndPolkaPrevious` becomes the L27 re-proposal-with-`2f+1`-justification input. Add the L39
+"n−f for any" input and the L42 cross-round decide input.
 
-- `Step`: `Unstarted → Propose → Prevote → Precommit → Commit` becomes
-  `Unstarted → Propose → Vote → Commit`. Everything keyed on `Step::Prevote` goes.
-- `State`: replace the `locked` / `valid` pair of `Option<RoundValue<Ctx::Value>>` with a single
-  `valid: Option<RoundValue<...>>`. Note the paper's `valid` holds `id(value)`, while Malachite's
-  `RoundValue` holds the full `Value` — decide whether to store the id (paper-faithful, smaller) or
-  the value (matches the existing proposal-keeper lookup path). Storing the id means re-proposal has
-  to fetch the full value from the proposal keeper, which is where it already lives.
-- `Input`: drop `PolkaAny`, `PolkaNil`, `ProposalAndPolkaCurrent`, `TimeoutPrevote`. Keep
-  `ProposalAndPolkaPrevious` but rename to reflect a `2f+1`-vote justification. Add an input for
-  "proposal + `n − f` votes" as the decide trigger (`ProposalAndPrecommitValue` may serve, but it is
-  currently fed at `quorum`).
-- `ScheduledTimeouts`: the `PREVOTE_BIT` retires; the bitset drops to two tracked kinds.
-- `TimeoutKind::Prevote` becomes unused on the fast path — leave the variant in place for the
-  classic path.
-- The `pol_round` asserts in `prevote()` / `prevote_previous()` move to the merged vote rule. The
-  interaction map already carries an unchecked bridge check that these asserts are unreachable given
-  how `mux.rs` routes proposals; the merge is a chance to discharge it rather than re-inherit it.
+`ScheduledTimeouts` loses `PREVOTE_BIT`. `TimeoutKind::Prevote` stays for the classic path but is
+unused on the fast one. The `pol_round` asserts in `prevote()`/`prevote_previous()` fold into the
+merged rule — a chance to discharge the standing bridge check that they are unreachable rather than
+re-inherit it.
 
-Confirmed behaviors that survive as-is, and should be re-checked rather than rewritten:
-*non-proposer never emits a proposal*; *decision output carries the decided proposal's round*;
-*round never moves backwards*; *proposal round mismatch never panics*. Properties
-`only_proposer_emits_proposal`, `decision_is_never_overwritten`, `commit_step_is_terminal`,
-`round_never_moves_backwards`, `decision_output_round_matches_state` all carry over.
+**`WaitForValid` needs a home.** It is a bounded wait inside `StartRound`, which a pure transition
+function cannot express. Options: a new `Output::WaitForValid(Timeout)` with the orchestrator
+holding the propose decision until it fires or `valid` advances; or model it as entering `Propose`
+with a pending flag and re-evaluating on each `2f+1` observation. This is the main **design question
+Studio's model should settle before Rust is written.**
 
-`timeout_scheduled_at_most_once_per_round` narrows to two kinds.
+Surviving confirmed behaviors, to re-check rather than rewrite: *non-proposer never emits a
+proposal*; *decision output carries the decided proposal's round*; *round never moves backwards*;
+*proposal round mismatch never panics*. Properties `only_proposer_emits_proposal`,
+`decision_is_never_overwritten`, `commit_step_is_terminal`, `round_never_moves_backwards`,
+`decision_output_round_matches_state` carry over; `timeout_scheduled_at_most_once_per_round` narrows
+to two kinds. The goal *"locked node unlocks for an older polka"* changes meaning — with the merge
+there is no unlock, and the intent becomes L28's `valid_p.round ≤ vr ∨ valid_p.value = id(v)`.
+Expect that card retracted and replaced.
 
-The confirmed goal *"locked node unlocks for an older polka"* is the one behavior whose **meaning**
-changes: with `locked` and `valid` merged there is no separate unlock, and the intended behavior
-becomes the `vr ≥ valid.round` re-proposal acceptance rule. Expect this card to be retracted and
-replaced rather than re-confirmed.
+### 2.4 `core-driver` — multiplexing
 
-### 3.4 `core-driver` — multiplexing
+`mux.rs`: `has_polka_value`, `has_polka_nil`, `has_polka_any`, `has_precommit_any`,
+`find_non_value_threshold` collapse to one single-vote-type helper parameterised by threshold.
+`apply_polka_certificate_votes` / `apply_commit_certificate_votes` must apply against the right one.
+The driver must also **retain fresh proposals across rounds** for finding 4. `driver` is only at
+`investigate`, so there is less confirmed contract to preserve — and correspondingly less safety net.
 
-`code/crates/core-driver/src/mux.rs` — the helpers `has_polka_value`, `has_polka_nil`,
-`has_polka_any`, `has_precommit_any`, `find_non_value_threshold` all encode the two-vote-type shape.
-They collapse to a single-vote-type set with a *threshold* parameter:
-`has_votes_for(round, value, threshold)`.
+### 2.5 `core-consensus`
 
-`apply_polka_certificate_votes` / `apply_commit_certificate_votes` must apply their votes against the
-right threshold.
+`handle/vote.rs`: one vote type. `handle/decide.rs`: `n−f`, cross-round; the interaction map already
+flags that the sync branch skips the voting path's local re-verification — resolve rather than port.
+`handle/propose.rs`: `WaitForValid` plus the fresh/`id` distinction. `params.rs`: `HIDDEN_LOCK_ROUND`
+is a classic construct — decide explicitly whether hidden locks even exist under merged `valid`
+before porting the mitigation. `MAX_FUTURE_ROUND_LOOKAHEAD` is unaffected, but note that with
+`SkipRound` gone its interaction with catch-up changes: the comment justifying it cites the `f+1`
+mechanism that no longer exists.
 
-Note `driver` is currently at Studio stage `investigate` and not yet `ready` — its model is not
-settled, so there is less confirmed contract here to preserve, and correspondingly less safety net.
+### 2.6 Downstream
 
-### 3.5 `core-consensus` — orchestration
-
-Mostly threshold-parameterization rather than restructuring:
-
-- `handle/vote.rs` — one vote type to admit.
-- `handle/decide.rs` — the decision quorum becomes `n − f`. The interaction map already flags that
-  this path *"skips the local re-verification that the voting path performs"* on the sync branch;
-  worth resolving here rather than porting forward.
-- `handle/propose.rs` / `proposal.rs` — re-proposal now carries `valid.round`.
-- `params.rs` — `HIDDEN_LOCK_ROUND` (the hidden-lock mitigation) is a classic-Tendermint construct.
-  Whether the hidden-lock problem even exists under merged `valid` state needs an explicit answer;
-  do not port the mitigation on faith.
-- `MAX_FUTURE_ROUND_LOOKAHEAD` is unaffected.
-
-### 3.6 Downstream: WAL, sync, codec
-
-- **WAL** (`ready`) — entry format is per-vote; if the fast path only ever writes `Precommit`, replay
-  is structurally unchanged. The *no-amnesia* property still requires the vote be durable before
-  publication, and with one voting step there is one fewer append per round — a latency win worth
-  measuring. Cross-protocol replay must be refused: a WAL written by a classic node must not be
-  replayed by a fast node.
-- **`value-sync`** (`ready`) — certificate verification threshold changes; the *safe catch-up*
-  property is only preserved if the certificate quorum matches the protocol the certificate was
-  produced under. Add the protocol identifier to what sync checks.
-- **`message-codec`** (in progress, stage `wire`) — if `VoteType` is unchanged, codec changes are
-  limited to certificate threshold semantics rather than encodings.
+**WAL**: one fewer append per round — a latency win worth measuring; no-amnesia still requires
+durable-before-publish. Refuse cross-protocol replay. **`value-sync`**: certificate threshold
+changes and certificates become cross-round; add a protocol identifier to what sync verifies.
+**`message-codec`**: with `VoteType` unchanged, the codec work is the proposal value-or-id
+distinction plus certificate semantics.
 
 ---
 
-## 4. Staged plan
+## 3. Staged plan
 
-### Stage 0 — pin the specification
+**Stage 1 — thresholds, no behavior change.** Add `decision`, repurpose `quorum`, remove `honest`
+from the fast params; make every `signing/src/ext.rs` entry point name its threshold; extend the
+corner-case tests. Classic behavior bit-identical — reviewable as a pure refactor.
 
-Read the paper's PDF properly and, crucially, **obtain the authors' Quint specification**. The paper
-states it ships one and that they model-checked the protocol with it. Malachite already has
-`quint-specs/round-state-machine.qnt` (786 lines) and `quint-specs/vote-keeper.qnt` (664 lines)
-model-checked against this codebase, and the `test/mbt` crate replays Quint ITF traces against the
-Rust code. If the paper's spec can be reconciled with ours, the MBT suite becomes the primary
-correctness instrument for this whole change — which would be the single highest-leverage thing to
-establish before writing any Rust.
+**Stage 2 — Studio derives the model.** Set up the components Studio does not yet have
+(`core-types-domain` first — the threshold arithmetic is the load-bearing change — then `driver` to
+`ready`, then `signing`, `equivocation-detection`), and have Studio produce the fast-protocol model
+against the code. Model-check agreement, the L42/L36 intersection argument, termination, and settle
+the `WaitForValid` design question **before Rust**. Use the authors' spec as a cross-check on
+requirements, never as a source to merge.
 
-Deliverable: a confirmed rule-by-rule transcription of the protocol, and a decision on whether we
-adopt, adapt, or independently re-derive the Quint model.
+**Stage 3 — vote keeper.** Two-thresholds-on-one-tally, `SkipRound` removal. Highest-risk unit;
+do it before the state machine.
 
-*Contact the authors — Daniel is reachable internally, and the reconciliation question is much
-cheaper to ask than to reverse-engineer.*
+**Stage 4 — round state machine.** Step collapse, `locked`/`valid` merge, `WaitForValid`.
 
-### Stage 1 — thresholds (no behavior change)
+**Stage 5 — driver and orchestrator.** Mux generalization, cross-round decide, fresh-proposal
+retention, `HIDDEN_LOCK_ROUND` answered.
 
-Add the third threshold to `ThresholdParams` and the `fast()` constructor; thread it through
-`signing/src/ext.rs` verification entry points so each names its threshold explicitly. Extend the
-corner-case tests to the 4/5 and 2/5 boundaries. Classic path behavior must be bit-identical after
-this stage — it is a pure refactor and should be reviewable as one.
+**Stage 6 — tests, via Studio.** Studio's test generation from the model's uncovered behavior
+families is the primary instrument. Multi-node runs at `n = 6` (`f = 1`) through `test/framework`;
+byzantine injection via `engine-byzantine`; crash/restart for WAL replay. Measure the latency win —
+two steps instead of three is the whole justification for a 5x replica cost.
 
-### Stage 2 — Quint model of the fast protocol
-
-Write (or adapt) `quint-specs/fast-round-state-machine.qnt` and `quint-specs/fast-vote-keeper.qnt`.
-Model-check agreement, the Lemma 2 intersection claim, and termination **before** touching Rust.
-This ordering is the point of having Studio: a protocol change is where the model earns its cost.
-
-### Stage 3 — vote keeper
-
-The two-thresholds-on-one-tally restructure. Independently testable and the highest-risk unit; do it
-before the state machine so the state machine has something correct to consume.
-
-### Stage 4 — round state machine
-
-Step collapse and `locked`/`valid` merge. Largest diff, but mechanical once Stages 2 and 3 are
-settled.
-
-### Stage 5 — driver and orchestrator
-
-Multiplexer generalization, decide path at `n − f`, re-proposal carrying `valid.round`, and the
-`HIDDEN_LOCK_ROUND` question answered explicitly.
-
-### Stage 6 — end-to-end
-
-Multi-node tests at `n = 6` (`f = 1`) via `test/framework`; byzantine injection via
-`engine-byzantine` (equivocation, force-nil, amnesia) against the fast rules; crash/restart tests
-for WAL replay. Measure the actual latency win — two steps instead of three is the entire
-justification for a 5x-instead-of-3x replica cost, so the number matters.
-
-### Stage 7 — Studio reconciliation
-
-Re-sync the affected components so the models track the new code, and work the behavior deck for the
-cards whose meaning changed (notably *"locked node unlocks for an older polka"*).
+**Stage 7 — Studio reconciliation.** Re-sync affected components and work the behavior deck for the
+cards whose meaning changed.
 
 ---
 
-## 5. Open questions
+## 4. Open questions
 
-1. **Is the 5x replica cost acceptable for the target deployment?** `n > 5f` means 6 validators to
-   tolerate 1, and 11 to tolerate 2. This is a product question that should be answered before
-   Stage 1, because it determines whether this is a research branch or a shipping path.
-2. **Fallback under `f ≥ n/5`.** If the validator set degrades past the fast bound, does the system
-   halt, or fall back to three-step operation? A dynamic fallback is a substantially harder protocol
-   than either endpoint and should be explicitly out of scope for v1.
-3. **`valid` as id or full value?** Paper-faithful vs. matching the existing proposal-keeper path.
-4. **Does the hidden-lock problem survive the `locked`/`valid` merge?** Determines whether
-   `HIDDEN_LOCK_ROUND` ports at all.
-5. **Vote extensions** — unchanged in principle, but the extension is now attached to the only vote
-   in the round rather than to the second of two. Confirm `VoteExtensionPolicy` still makes sense.
-6. **Equivocation evidence** — with one vote type, a double-vote is a single shape rather than two.
-   The `equivocation-detection` component's *no double count* property should get simpler, not
-   harder; confirm that.
+1. **Is the 5x replica cost acceptable for the target deployment?** 6 validators to tolerate 1, 11
+   to tolerate 2. Answer before Stage 1 — it decides research branch vs. shipping path.
+2. **How is `WaitForValid` expressed** in a pure transition function? See 2.3. Studio's model should
+   settle this.
+3. **Fallback when `f ≥ n/5`.** Halt, or fall back to three-step? A dynamic fallback is a harder
+   protocol than either endpoint; recommend explicitly out of scope for v1.
+4. **Cross-round commit certificates** (finding 4) — how long must a fresh proposal be retained, and
+   what bounds that memory?
+5. **Does the hidden-lock problem survive** the `locked`/`valid` merge?
+6. **Vote extensions** — now attached to the only vote in the round. Confirm `VoteExtensionPolicy`
+   still makes sense.
+7. **Equivocation evidence** — one vote type should *simplify* the no-double-count property.
 
 ---
 
-## 6. What this plan rests on, and what it does not
+## 5. What this rests on
 
-Grounded in the repository: all file paths, the `ThresholdParams` shape and its plumbing, the `Step`
-and `Input` enums, the `mux.rs` helper set, `VoteType`, and the `quint-specs` inventory.
+**Paper:** Algorithm 1 transcribed verbatim (Stage 0). The five findings above follow directly from
+those lines. Not obtained: the model-checked invariant names and configuration.
 
-Grounded in Studio (models `ready` for `round-state-machine`, `vote-keeper`,
-`consensus-orchestrator`, `wal`, `value-sync`; `driver` still `investigate`): the confirmed behavior
-cards and property names cited as the acceptance checklist. Every bridge check in the interaction
-map is currently `unchecked`, so none of the cross-component requirements quoted here has been
-verified against the code — they are stated intent, not evidence.
+**Repository:** all file paths, `ThresholdParams` and its plumbing, the `Step`/`Input` enums, the
+`mux.rs` helper set, `VoteType`, `quint-specs` inventory — all verified against the branch.
 
-**Not** grounded: the protocol rules themselves, which come from a single automated read of the
-arXiv HTML. Stage 0 is a prerequisite, not a formality.
+**Studio:** confirmed behavior cards and property names, from models `ready` on
+`round-state-machine`, `vote-keeper`, `consensus-orchestrator`, `wal`, `value-sync`. Every bridge
+check in the interaction map is currently `unchecked`, so the cross-component requirements quoted
+here are stated intent, not evidence.
+
+**Deliberately not used:** the authors' Quint specification and Malachite's `test/mbt` ITF-replay
+suite. Requirements input and inspiration respectively, per the method decision at the top.
