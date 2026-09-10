@@ -14,6 +14,7 @@
 
 extern crate alloc;
 
+pub mod fast;
 pub mod input;
 pub mod output;
 pub mod state;
