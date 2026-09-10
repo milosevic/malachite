@@ -23,3 +23,6 @@ time = { workspace = true, optional = true }
 [features]
 std = []
 debug = ["std", "dep:time"]
+
+[dev-dependencies]
+malachitebft-test = { workspace = true }
