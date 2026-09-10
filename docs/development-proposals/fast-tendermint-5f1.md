@@ -272,14 +272,32 @@ a cross-check on requirements, never as a source to merge.
 
 Two operational constraints, learned the hard way on 2026-09-10:
 
-- **Studio serialises oracle access.** Components set up in parallel queue behind one another for
-  the oracle slot, and a run that fails to terminate blocks every other component silently — the
-  blocked one simply looks slow. Set up components in small batches, and when a pipeline appears
-  stalled, check for a long-running `quint-rs oracle-daemon` holding the slot before assuming the
-  worker is stuck.
+- **Exhaustiveness runs take ~1.5 hours and print nothing for most of it.** Studio's exhaustiveness
+  config hard-codes 1000 samples x 50 steps (25x the wire run). On `core-types-domain` phase 1 took
+  17 min and produced 10,660 behavior classes; the all-soft guard run took another 8.5 min; the
+  single-conjunct confirm phase that follows emits **no log output at all** and, at `confirmCap=8`,
+  runs ~68 min more. A run killed at ~50 min is killed mid-phase, always before anything prints —
+  so an apparently silent, hour-long run is normal, not stuck. Judge liveness by I/O, not by the
+  log: a working run writes thousands of ITF JSON files per minute into `$TMPDIR`.
+- **The cost is I/O, not simulation.** Behavior classes are prefix-closed observation-firing
+  sequences, and each is serialized to its own ~35 KB ITF file, so the file count explodes with the
+  observation count (34 here). Profiling puts ~95% of CPU in `serde_json` -> `fs::File` and almost
+  none in `simulate`. Two consequences: a wide observation surface is expensive at *exhaustiveness*
+  time even when it is cheap to check, and `$TMPDIR` accumulates gigabytes (4.85 GB observed) that
+  nothing reclaims.
+- **Check the worker count.** Every malachite run observed used `workers=1` with 7 worker threads
+  idle, against `workers=6` on a comparable run in another project. If that is configurable it is
+  the single cheapest speedup available; it is the most conspicuous anomaly in the runs.
+- **Invariant quantification is NOT the problem.** Measured per-step cost was 20.7 ms with zero
+  invariants and 20.6 ms with all 11, and the arithmetic domain is only `0.to(9)`. Do not shrink
+  the quantified domains of `quorum_boundary_is_not_met` / `is_met_agrees_with_min_expected` to buy
+  speed — it buys none, and those two are the properties this whole change rests on.
 - **Components that share files cannot be parallelised.** `core-types-domain`'s instrumentation
   needs sites in the `signing` crate, so running both setups at once had two workers editing the
-  same crate. Sequence any components whose `paths` or instrumentation overlap.
+  same crate. Sequence any components whose `paths` or instrumentation overlap. This is a real
+  constraint; oracle *concurrency* is not — several daemons do run at once. The reason to limit
+  concurrency is machine load (each run costs ~100% of a core and ~133 MB/min of writes), not a
+  Studio-side lock.
 
 **Stage 1 (second) — thresholds, no behavior change.** Add `decision`, repurpose `quorum`, remove
 `honest` from the fast params; make every `signing/src/ext.rs` entry point name its threshold;
