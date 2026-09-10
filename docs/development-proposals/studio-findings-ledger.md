@@ -224,6 +224,27 @@ Studio finding; that needs the owner. Statuses below are mine, not Studio's.
 - **Status:** resolved. Lesson recorded in the plan: never parallelise components whose
   paths or instrumentation overlap.
 
+## F-17 — Re-sync confirms the fast module did not perturb the classic machine
+
+- **Anchor:** `e237290b` (fast module + its 22 tests present)
+- **Component:** `round-state-machine`
+- **Action:** `restart_component` with no stage (re-sync), after `drift.code: true` appeared
+  from adding `core-state-machine/src/fast/`.
+- **Result:** drift cleared, component back to `ready`, snapshot current at revision 1,
+  **89 tests replayed**, all 7 properties and 33 observations still confirmed,
+  `specGaps: 0`, `modelIssues: 0`, `productBugs: 0`, no pending review.
+- **What this is evidence of:** the fork-not-a-flag design holds — adding the fast state
+  machine changed nothing observable about the classic one. This is measured, not asserted.
+- **What it is NOT evidence of:** anything about the fast protocol. Studio did **not**
+  propose modelling `fast/`, and by design cannot: a re-sync reconciles against the
+  component's declared `paths` and `testCommand`, and the command is
+  `-p arc-malachitebft-core-driver --test it`, which never runs
+  `core-state-machine/tests/fast_round.rs`. My 22 tests produced zero traces.
+- **Consequence:** verifying the fast protocol needs a **separate component** with its own
+  spec of Algorithm 1, its own observations, and a test command covering `fast_round.rs`.
+  That needs `survey_components` to pick up `fast/`.
+- **Status:** understood. The verification gap below is unchanged.
+
 ---
 
 ## Open verification gaps (not findings, but worth tracking)
