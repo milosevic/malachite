@@ -1917,7 +1917,961 @@ retiredObservations = []
 retiredProperties = []
 wireConfirmed = true
 setupCompleted = true
-cardsDone = false
+cardsDone = true
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where the keeper still reports a value as `Valid` after the application has re-delivered that same value as `Invalid`"
+expectations = [
+    "`handle_validity_change` propagates `Invalid -> Valid` but logs an error and keeps the old value on `Valid -> Invalid`",
+    "`store_value` returns the stored validity, so the caller overwrites the incoming `Invalid` with `Valid`",
+    "the driver then receives the proposal with validity `Valid` for a value the application has declared `Invalid`",
+]
+headline = "Retracted Validity Reaches Consensus"
+id = "retracted-validity-reaches-consensus"
+quint = [
+    "val noRetractedValidity =",
+    "  entries.forall(e =>",
+    "    appVerdict.get(e.value_id) == Invalid",
+    "      implies e.validity == Invalid",
+    "  )",
+]
+recordedAt = 1789041150432
+why = "A one-way validity lattice means an application that corrects itself downward is silently ignored and consensus proceeds on a value the app rejects."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "storeValue(newValue)"
+actor = "system"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "entry.validity"
+from = "Valid"
+to = "Invalid"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.facts]]
+fact = "driver.input.validity == Invalid"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "storeValue(newValue)"
+actor = "system"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "entry.validity"
+from = "Valid"
+to = "Valid"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.facts]]
+fact = "log.level == error"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "processProposal(newValue)"
+actor = "system"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "driver.input"
+from = "none"
+to = "Proposal"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.facts]]
+fact = "driver.input.validity == Valid"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:3076e3692ca7d29a"
+path = "code/crates/core-consensus/src/full_proposal.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:0fc1ee0804437eb2"
+path = "code/crates/core-consensus/src/state.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:f5ac736d5803eefa"
+path = "code/crates/core-consensus/src/handle/proposed_value.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "entry.state"
+value = "Full"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "entry.validity"
+value = "Valid"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "entry.round"
+value = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+fact = "newValue.value_id == entry.value_id"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "newValue.validity"
+note = "app revised its verdict"
+value = "Invalid"
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where a value that was accepted and written to the WAL before a restart is dropped by the per-round cap when it is replayed"
+expectations = [
+    "`on_proposed_value` gates on `origin.is_consensus()`, and WAL replay arrives with origin `Consensus`",
+    "the WAL can already hold more than `cap` distinct values for one round if the cap was introduced or raised after those entries were written",
+    "the third replayed value is dropped, so the node's post-restart keeper differs from its pre-restart keeper",
+]
+headline = "Replay Restores Every Accepted Value"
+id = "replay-restores-every-accepted-value"
+quint = [
+    "val replayIsFaithful =",
+    "  walEntries.filter(e => e.height == h and e.round == r)",
+    "    .forall(e =>",
+    "      keeperAfterReplay.contains(e.value_id)",
+    "    )",
+]
+recordedAt = 1789041174103
+why = "The cap pre-gate cannot tell a fresh network message from a WAL replay of a value this node already accepted, so recovery can silently lose state it held before the crash."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "replayProposedValue(v3)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "keeper.bucket_len"
+from = "2"
+to = "3"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "metrics.dropped_capped"
+from = "0"
+to = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "replayProposedValue(v1)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "keeper.bucket_len"
+from = "0"
+to = "1"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "replayProposedValue(v2)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "keeper.bucket_len"
+from = "1"
+to = "2"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "replayProposedValue(v3)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "keeper.bucket_len"
+from = "2"
+to = "2"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "metrics.dropped_capped"
+from = "0"
+to = "1"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:f5ac736d5803eefa"
+path = "code/crates/core-consensus/src/handle/proposed_value.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:0fc1ee0804437eb2"
+path = "code/crates/core-consensus/src/state.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:3076e3692ca7d29a"
+path = "code/crates/core-consensus/src/full_proposal.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "wal.entries"
+value = "3"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "keeper.bucket_len"
+value = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "cap"
+value = "2"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "origin"
+note = "WAL replay uses this origin"
+value = "Consensus"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+fact = "polkaCertificate == none"
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where inputs buffered for a height are removed from the queue and never handled because that height was started as a restart"
+expectations = [
+    "`take_pending_inputs` runs before the `is_restart` early return, so `input_queue` is drained either way",
+    "when `is_restart` is `true` the drained inputs are dropped instead of going through `handle_input`",
+    "a proposal buffered while the driver was at round `Nil` is lost and must be re-received from the network",
+]
+headline = "Buffered Inputs Survive A Restart"
+id = "buffered-inputs-survive-a-restart"
+quint = [
+    "val noSilentRestartLoss =",
+    "  startedHeight == state.height implies",
+    "    (pendingFor(state.height) == Set() or handledInputs.size() > 0)",
+]
+recordedAt = 1789041179584
+why = "Draining the queue and then returning early on restart discards inputs that no other path re-delivers."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "resetAndStartHeight(H, isRestart)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "state.input_queue.size"
+from = "1"
+to = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "state.handled_inputs"
+from = "0"
+to = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "state.driver.round"
+from = "Nil"
+to = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "onProposal(proposal)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.input_queue.size"
+from = "0"
+to = "1"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "resetAndStartHeight(H, isRestart)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.input_queue.size"
+from = "1"
+to = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.handled_inputs"
+from = "0"
+to = "1"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.driver.round"
+from = "Nil"
+to = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:9fcf0f2508583867"
+path = "code/crates/core-consensus/src/handle/start_height.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:0fc1ee0804437eb2"
+path = "code/crates/core-consensus/src/state.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:18e017d2acfaf546"
+path = "code/crates/core-consensus/src/handle/proposal.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.height"
+value = "H"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.driver.round"
+value = "Nil"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.input_queue.size"
+value = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.handled_inputs"
+value = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "proposal.height"
+value = "H"
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where the certificate emitted by `Effect::Finalize` differs from the one already emitted by `Effect::Decide` for the same height."
+expectations = [
+    "`finalize_height` rebuilds the certificate from `restore_precommits` at finalize time, so precommits applied during the finalization period are included",
+    "The application sees two different certificates for height `H`: `Effect::Decide` carries 3 signatures, `Effect::Finalize` carries 4",
+    "`extract_vote_extensions` is re-run at finalize time, so the finalize extensions can differ from the decide extensions",
+]
+headline = "Finalize certificate matches the decided one"
+id = "finalize-certificate-matches-the-decided-one"
+quint = [
+    "val certificateStable =",
+    "  emittedDecide.height == emittedFinalize.height",
+    "    implies emittedDecide.certificate == emittedFinalize.certificate",
+]
+recordedAt = 1789041193885
+why = "An application that stores the Decide certificate and a peer that stores the Finalize certificate would disagree on the canonical commit for the same height."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "on_timeout_elapsed(FinalizeHeight)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "state.finalization_period"
+from = "true"
+to = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "emitted.finalizeCertificate"
+from = "None"
+to = "Cert(3)"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "decide(co, state, metrics)"
+actor = "agent"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.finalization_period"
+from = "false"
+to = "true"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "emitted.decideCertificate"
+from = "None"
+to = "Cert(3)"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "on_vote(precommit(H, r, id, v4))"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "precommits.count"
+from = "3"
+to = "4"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "on_timeout_elapsed(FinalizeHeight)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.finalization_period"
+from = "true"
+to = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "emitted.finalizeCertificate"
+from = "None"
+to = "Cert(4)"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:ff1b77f64c554207"
+path = "code/crates/core-consensus/src/handle/decide.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:0e2604bb2c48851a"
+path = "code/crates/core-consensus/src/handle/finalize.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:d5c6df6af147fb19"
+path = "code/crates/core-consensus/src/handle/driver.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "driver.step"
+value = "Commit"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.height"
+value = "H"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.target_time"
+value = "Some(2s)"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.finalization_period"
+value = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "precommits.count"
+note = "exactly the commit threshold"
+value = "3"
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where the number of distinct entries stored for one `(height, round)` exceeds the per-round cap"
+expectations = [
+    "`on_proposed_value` applies `exceeds_per_round_cap` only when `origin.is_consensus()`",
+    "`store_value_at_value_round` pushes a new `ValueOnly` entry with no cap check of its own, by design",
+    "so a stream of sync values with distinct ids at the same round grows the bucket without bound, and each one is also written to the WAL",
+]
+headline = "Sync Values Stay Within The Round Cap"
+id = "sync-values-stay-within-the-round-cap"
+quint = [
+    "val bucketWithinCap =",
+    "  keeper.keys().forall(k =>",
+    "    keeper.get(k).length() <= MAX_PROPOSALS_PER_ROUND",
+    "  )",
+]
+recordedAt = 1789041200890
+why = "The cap that bounds keeper and WAL growth is enforced entirely by one caller-side gate that sync values skip, so the keeper layer has no invariant of its own to fall back on."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "storeValueAtValueRound(syncValue)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "keeper.bucket_len"
+from = "2"
+to = "2"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "onProposedValue(syncValue, Sync)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "capGate.outcome"
+from = "checked"
+to = "skipped"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "storeValueAtValueRound(syncValue)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "keeper.bucket_len"
+from = "2"
+to = "3"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:3076e3692ca7d29a"
+path = "code/crates/core-consensus/src/full_proposal.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:f5ac736d5803eefa"
+path = "code/crates/core-consensus/src/handle/proposed_value.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:adfa3ec3ec1c9d18"
+path = "code/crates/core-consensus/src/handle/sync.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "keeper.bucket_len"
+value = "2"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "cap"
+value = "2"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "origin"
+value = "Sync"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+fact = "syncValue.value_id != stored.value_id"
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where a height is finalized before `target_time` has elapsed."
+expectations = [
+    "`sync_decision` is `true` because the certificate came from the driver's stored commit certificate, so `decide` takes the `finalizing immediately` branch",
+    "`state.finalization_period` is never set and no `FinalizeHeight` timeout is scheduled, even though `elapsed < target_time`",
+    "The certificate is also not re-verified locally: `verify_commit_certificate` runs only on the else branch",
+    "The code marks this with a `FIXME` calling it an assumption rather than an enforced rule",
+]
+headline = "Sync decisions still observe target_time"
+id = "sync-decisions-still-observe-target-time"
+quint = [
+    "val targetTimeRespected =",
+    "  finalized.contains(h) implies",
+    "    elapsedAt(h) >= targetTime",
+]
+recordedAt = 1789041205347
+why = "A node catching up via sync produces blocks at a different pace than the configured target block time, so the chain's block interval silently depends on how a node reached the decision."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "decide(co, state, metrics)"
+actor = "agent"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "state.finalization_period"
+from = "false"
+to = "true"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "emitted.finalize"
+from = "None"
+to = "None"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "state.elapsed"
+from = "50ms"
+to = "50ms"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "on_value_response(certificate(H))"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "driver.step"
+from = "Propose"
+to = "Commit"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "driver.commitCertificate"
+from = "None"
+to = "Stored(H)"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "decide(co, state, metrics)"
+actor = "agent"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.finalization_period"
+from = "false"
+to = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "emitted.finalize"
+from = "None"
+to = "Some(H)"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.elapsed"
+from = "50ms"
+to = "50ms"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:ff1b77f64c554207"
+path = "code/crates/core-consensus/src/handle/decide.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:adfa3ec3ec1c9d18"
+path = "code/crates/core-consensus/src/handle/sync.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.height"
+value = "H"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.target_time"
+value = "Some(2s)"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.elapsed"
+value = "50ms"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "driver.step"
+value = "Propose"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.finalization_period"
+value = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where a buffered input is silently discarded because the bounded queue was full and the rejection was ignored"
+expectations = [
+    "`BoundedQueue::push` returns `false` when the queue is full and the new index is the highest, but `buffer_input` ignores the return value",
+    "the only trace of the drop is a `debug!` log line inside the queue, invisible to consensus and to metrics",
+    "the mirror case is just as quiet: pushing a lower index evicts the highest key entirely, so an already-buffered future height disappears without any counter",
+]
+headline = "Queue Overflow Is Signalled To The Caller"
+id = "queue-overflow-is-signalled-to-the-caller"
+quint = [
+    "val overflowIsObservable =",
+    "  bufferedInput.rejected implies",
+    "    (caller.sawRejection or metrics.droppedInputs > 0)",
+]
+recordedAt = 1789041214203
+why = "`buffer_input` throws away `push`'s boolean, so a full input queue drops consensus messages with no signal beyond a debug log."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "onProposal(proposal)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "queue.keys"
+from = "{12}"
+to = "{12}"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "caller.saw_rejection"
+from = "false"
+to = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "resetAndStartHeight(11)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.height"
+from = "10"
+to = "11"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "onProposal(proposal)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "queue.keys"
+from = "{12}"
+to = "{12}"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "caller.saw_rejection"
+from = "false"
+to = "true"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:0fc1ee0804437eb2"
+path = "code/crates/core-consensus/src/state.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:a0ed3032286cca81"
+path = "code/crates/core-consensus/src/util/bounded_queue.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:18e017d2acfaf546"
+path = "code/crates/core-consensus/src/handle/proposal.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "queue.capacity"
+value = "1"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "queue.per_key_capacity"
+value = "100"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.height"
+value = "10"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "queue.keys"
+value = "{12}"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "proposal.height"
+value = "13"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "caller.saw_rejection"
+value = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where a valid vote for the current height is discarded with no record and no way to recover it."
+expectations = [
+    "The vote is dropped before the dedupe, signature and WAL steps, so nothing about it survives",
+    "Buffering only applies to votes for a *higher height*; a same-height far-future round is not buffered at all",
+    "The only trace left is the `dropped_future_round_votes` counter under the `metrics` feature",
+    "Nothing re-requests the vote, so a node lagging more than 20 rounds behind cannot catch up on the vote path",
+]
+headline = "Far-future-round votes are not lost forever"
+id = "far-future-round-votes-are-not-lost-forever"
+quint = [
+    "val noSilentVoteLoss =",
+    "  all { v.height == state.height, validSignature(v) }",
+    "    implies (applied.contains(v) or buffered.contains(v))",
+]
+recordedAt = 1789041226213
+why = "A node that falls more than the lookahead behind within a height can never rejoin that height through votes, and the drop is invisible without metrics enabled."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "on_vote(prevote(H, 40, id, v2))"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "state.inputQueue.size"
+from = "0"
+to = "1"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "walAppended"
+from = "None"
+to = "None"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "metrics.dropped_future_round_votes"
+from = "0"
+to = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "partition heals"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "peers.round"
+from = "0"
+to = "40"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "on_vote(prevote(H, 40, id, v2))"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.inputQueue.size"
+from = "0"
+to = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "walAppended"
+from = "None"
+to = "None"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "metrics.dropped_future_round_votes"
+from = "0"
+to = "1"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:0aeeb7e3bedd6f9c"
+path = "code/crates/core-consensus/src/handle/vote.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:1b2c0db6af60c0de"
+path = "code/crates/core-consensus/src/params.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.height"
+value = "H"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.round"
+value = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "params.MAX_FUTURE_ROUND_LOOKAHEAD"
+value = "20"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "vote.height"
+value = "H"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "vote.round"
+value = "40"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.inputQueue.size"
+value = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where the per-round proposal cap rejects a proposal the node needs in order to decide the round"
+expectations = [
+    "`exceeds_per_round_cap` drops the proposal before signature verification, WAL append, and the keeper, incrementing only `dropped_capped_proposals`",
+    "the sole exemption is a proposal whose value already holds a polka certificate, so a value a quorum is converging on but has not yet certified gets no exemption",
+    "the cap is per `(height, round)`, so a proposer flooding junk proposals can exhaust it before the honest proposal arrives and force the round to time out",
+]
+headline = "Capped Round Still Accepts The Decidable Proposal"
+id = "capped-round-still-accepts-the-decidable-proposal"
+quint = [
+    "val cappedRoundStillProgresses =",
+    "  proposalRejectedByCap(p) implies",
+    "    not(canDecideOn(p.value))",
+]
+recordedAt = 1789041238528
+why = "The WAL-growth cap silently discards proposals for a round and exempts only already-certified values, so an honest proposal arriving late in a flooded round is lost."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "onTimeoutElapsed(Precommit, 0)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "state.decided"
+from = "false"
+to = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "state.round"
+from = "0"
+to = "1"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "onProposal(proposal)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "keeper.proposals_at_round"
+from = "cap"
+to = "cap"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "metrics.dropped_capped"
+from = "0"
+to = "1"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "onTimeoutElapsed(Precommit, 0)"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.decided"
+from = "false"
+to = "true"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.round"
+from = "0"
+to = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:18e017d2acfaf546"
+path = "code/crates/core-consensus/src/handle/proposal.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:9e8761aeab3b0e12"
+path = "code/crates/core-consensus/src/handle/timeout.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.height"
+value = "H"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.round"
+value = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "keeper.proposals_at_round"
+value = "cap"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "proposal.round"
+value = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "proposal.has_polka_cert"
+value = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.decided"
+value = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards]]
+claim = "It should be impossible to reach a state where handling an input aborts the node instead of returning an error."
+expectations = [
+    "`on_timeout_elapsed` gates `FinalizeHeight` on `step_is_commit()` only, which is still true after finalizing",
+    "`finalize_height` then hits `assert!(state.finalization_period)` and panics",
+    "The two guards disagree: `decide` sets `finalization_period` as the real latch, but the timeout branch does not consult it",
+]
+headline = "Second FinalizeHeight timeout is a no-op"
+id = "second-finalizeheight-timeout-is-a-no-op"
+quint = [
+    "val noAbortOnInput =",
+    "  handle(state, TimeoutElapsed(FinalizeHeight(r)))",
+    "    != Aborted",
+]
+recordedAt = 1789041239650
+why = "A duplicate or late finalize timeout takes the whole validator process down rather than being ignored as a stale timeout."
+
+[[components.consensus-orchestrator.productIntent.hazards.instead]]
+action = "on_timeout_elapsed(FinalizeHeight(0))"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "process.status"
+from = "Running"
+to = "Running"
+
+[[components.consensus-orchestrator.productIntent.hazards.instead.effects]]
+field = "emitted.finalize"
+from = "Some(H)"
+to = "Some(H)"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "on_timeout_elapsed(FinalizeHeight(0))"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "state.finalization_period"
+from = "true"
+to = "false"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "emitted.finalize"
+from = "None"
+to = "Some(H)"
+
+[[components.consensus-orchestrator.productIntent.hazards.run]]
+action = "on_timeout_elapsed(FinalizeHeight(0))"
+actor = "system"
+facts = []
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "process.status"
+from = "Running"
+to = "Panicked"
+
+[[components.consensus-orchestrator.productIntent.hazards.run.effects]]
+field = "emitted.finalize"
+from = "Some(H)"
+to = "Some(H)"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:9e8761aeab3b0e12"
+path = "code/crates/core-consensus/src/handle/timeout.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:0e2604bb2c48851a"
+path = "code/crates/core-consensus/src/handle/finalize.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.sources]]
+hash = "fnv1a64:ff1b77f64c554207"
+path = "code/crates/core-consensus/src/handle/decide.rs"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.height"
+value = "H"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.round"
+value = "0"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "driver.step"
+value = "Commit"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "state.finalization_period"
+value = "true"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "scheduled.FinalizeHeight"
+note = "same round scheduled twice"
+value = "Round(0)"
+
+[[components.consensus-orchestrator.productIntent.hazards.start]]
+field = "process.status"
+value = "Running"
 
 [components.consensus-orchestrator.oracle]
 format = "quint-oracle-config"
@@ -2209,8 +3163,8 @@ adversarySurface = [
 specHints = "All quorum math is threshold.rs:52-88 — is_met's strict '>' and min_expected's floor division are the two places an off-by-one would hide, and they are not obviously consistent with each other. certificate.rs:138-183 is the verification error vocabulary (verification itself lives in core-consensus). validator_set.rs is a trait with no in-crate enforcement of the ordering or dedup it documents. utils/height.rs and height_params.rs carry the height-window helpers. ser.rs and ser/borsh.rs belong to message-codec."
 cardRead = false
 connectionsRead = false
-spec = ""
-version = 0
+spec = "quint-specs/core-types-domain.qnt"
+version = 1
 observationsConfirmed = false
 propertiesConfirmed = false
 confirmedObservations = []
@@ -2220,6 +3174,202 @@ retiredProperties = []
 wireConfirmed = false
 setupCompleted = false
 cardsDone = false
+
+[components.core-types-domain.oracle]
+format = "quint-oracle-config"
+version = 1
+spec = "quint-specs/core-types-domain.qnt"
+main = "core_types_domain"
+eventScope = "core-types-domain"
+observations = [
+    "quorum_met",
+    "quorum_not_met",
+    "quorum_boundary_exactly_at_threshold",
+    "threshold_multiply_overflow_panicked",
+    "min_expected_divide_by_zero_panicked",
+    "min_expected_computed",
+    "validator_set_installed",
+    "validator_set_empty_panicked",
+    "validator_set_power_overflow_panicked",
+    "validator_set_has_duplicate_address",
+    "validator_set_out_of_documented_order",
+    "validator_set_total_power_is_zero",
+    "lookup_by_address_missed",
+    "lookup_by_index_out_of_range",
+    "proposer_selected",
+    "proposer_selection_nil_round_panicked",
+    "proposer_selection_zero_height_panicked",
+    "height_decremented_below_minimum",
+    "height_incremented",
+    "round_incremented_from_nil",
+    "timeout_clamped_at_max",
+    "timeout_below_cap",
+    "finalize_height_timeout_exceeds_cap",
+    "zero_timeout_computed",
+    "timeout_nil_round_panicked",
+    "commit_certificate_dropped_votes",
+    "commit_certificate_kept_all_votes",
+    "commit_certificate_has_duplicate_signer",
+    "round_certificate_kept_foreign_vote",
+    "enter_round_certificate_lifted_from_commit",
+    "certificate_signer_unknown_to_set",
+    "certificate_rejected_as_duplicate_vote",
+    "certificate_signed_power_overflowed",
+    "certificate_signed_power_meets_quorum",
+    "certificate_signed_power_below_quorum",
+]
+unguidedStepBudget = 10
+stepReplayBudget = 50
+guardScenarios = true
+
+[components.core-types-domain.oracle.studio]
+system = "Core Types &amp; Quorum Domain"
+model = "quint-specs/core-types-domain.qnt"
+invariants = [
+    "quorum_boundary_is_not_met",
+    "is_met_agrees_with_min_expected",
+    "quorums_always_intersect",
+    "quorum_check_never_overflows_for_an_installed_set",
+    "decrement_below_minimum_returns_none",
+    "computed_timeouts_are_positive_and_capped",
+    "validator_set_is_deterministically_ordered",
+    "certificate_keeps_only_matching_votes",
+    "certificate_has_no_duplicate_signers",
+    "signed_power_never_exceeds_total",
+    "proposer_is_a_member",
+    "proposer_independent_of_set_order",
+]
+
+[[components.core-types-domain.oracle.studio.adversaryDispositions]]
+row = "Total voting power of zero — threshold comparisons degenerate"
+disposition = "modeled"
+
+[components.core-types-domain.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "ValidatorSetnew_add",
+    "ValidatorSetnew",
+    "ValidatorSettotal_voting_power",
+    "ThresholdParamis_met",
+    "verify_certificate_power",
+]
+observations = [
+    "validator_set_total_power_is_zero",
+    "certificate_signed_power_below_quorum",
+]
+properties = [
+    "is_met_agrees_with_min_expected",
+    "quorum_boundary_is_not_met",
+]
+
+[[components.core-types-domain.oracle.studio.adversaryDispositions]]
+row = "Weight or total large enough to overflow weight*denominator or total*numerator — an explicit panic, not an error (threshold.rs:71, 74)"
+disposition = "modeled"
+
+[components.core-types-domain.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "ThresholdParamis_met_overflow_panics",
+    "ThresholdParammin_expected_panics",
+    "ValidatorSetnew_power_overflow_panics",
+    "verify_certificate_power_overflow",
+]
+observations = [
+    "threshold_multiply_overflow_panicked",
+    "min_expected_divide_by_zero_panicked",
+    "validator_set_power_overflow_panicked",
+    "certificate_signed_power_overflowed",
+]
+properties = ["quorum_check_never_overflows_for_an_installed_set"]
+
+[[components.core-types-domain.oracle.studio.adversaryDispositions]]
+row = "Duplicate validator addresses in a validator set, and duplicate votes from one address fed to CommitCertificate::new, which does not dedupe"
+disposition = "modeled"
+
+[components.core-types-domain.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "ValidatorSetnew_add",
+    "add_vote",
+    "CommitCertificatenew",
+    "verify_certificate_power_duplicate_vote",
+]
+observations = [
+    "validator_set_has_duplicate_address",
+    "commit_certificate_has_duplicate_signer",
+    "certificate_rejected_as_duplicate_vote",
+]
+properties = [
+    "certificate_has_no_duplicate_signers",
+    "signed_power_never_exceeds_total",
+    "validator_set_is_deterministically_ordered",
+]
+
+[[components.core-types-domain.oracle.studio.adversaryDispositions]]
+row = "A certificate naming a validator absent from the set (UnknownValidator)"
+disposition = "modeled"
+
+[components.core-types-domain.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "add_signer",
+    "verify_certificate_power_unknown_validator",
+    "ValidatorSetget_by_address",
+]
+observations = [
+    "certificate_signer_unknown_to_set",
+    "lookup_by_address_missed",
+]
+properties = ["signed_power_never_exceeds_total"]
+
+[[components.core-types-domain.oracle.studio.adversaryDispositions]]
+row = "Exactly-at-boundary power at 1/3 or 2/3 — the off-by-one the corner-case test pins"
+disposition = "modeled"
+
+[components.core-types-domain.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "ThresholdParamis_met",
+    "ThresholdParammin_expected",
+    "ThresholdParamnew",
+]
+observations = [
+    "quorum_boundary_exactly_at_threshold",
+    "quorum_met",
+    "quorum_not_met",
+]
+properties = [
+    "quorum_boundary_is_not_met",
+    "is_met_agrees_with_min_expected",
+    "quorums_always_intersect",
+]
+
+[[components.core-types-domain.oracle.studio.adversaryDispositions]]
+row = "Round::Nil passed where Timeouts::duration_for expects a defined round (panics)"
+disposition = "modeled"
+
+[components.core-types-domain.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "Timeoutsduration_for_nil_round_panics",
+    "Contextselect_proposer_nil_round_panics",
+]
+observations = [
+    "timeout_nil_round_panicked",
+    "proposer_selection_nil_round_panicked",
+]
+
+[[components.core-types-domain.oracle.studio.adversaryDispositions]]
+row = "Height decrement below the minimum height"
+disposition = "modeled"
+
+[components.core-types-domain.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["Heightdecrement_by"]
+observations = ["height_decremented_below_minimum"]
+properties = ["decrement_below_minimum_returns_none"]
+
+[components.core-types-domain.fingerprints]
+spec = ""
+oracle = "fnv1a64:1958ef5dde628c32"
+coverage = ""
+
+[components.core-types-domain.fingerprints.code]
+
+[components.core-types-domain.fingerprints.instrumented]
 
 [components.driver]
 name = "Driver"
@@ -2281,7 +3431,7 @@ specHints = "driver.rs:358 process()/apply() is the top-level entry; lift_vote_o
 cardRead = false
 connectionsRead = false
 spec = "quint-specs/driver.qnt"
-version = 1
+version = 4
 observationsConfirmed = false
 propertiesConfirmed = false
 confirmedObservations = []
@@ -2289,7 +3439,7 @@ confirmedProperties = []
 retiredObservations = []
 retiredProperties = []
 wireConfirmed = true
-setupCompleted = false
+setupCompleted = true
 cardsDone = false
 
 [components.driver.oracle]
@@ -2322,18 +3472,19 @@ observations = [
     "proposal_validity_upgraded",
 ]
 testCommand = [
-    "cargo",
+    "/Users/zarkomilosevic/.cargo/bin/cargo",
     "test",
     "--manifest-path",
     "code/Cargo.toml",
     "-p",
     "arc-malachitebft-core-driver",
+    "-p",
+    "arc-malachitebft-core-consensus",
     "--features",
     "quint-oracle/enabled",
-    "--test",
-    "it",
     "--",
-    "--test-threads=1",
+    "--skip",
+    "driver_conflicting_proposal_panic",
 ]
 unguidedStepBudget = 10
 stepReplayBudget = 50
@@ -2342,6 +3493,21 @@ guardScenarios = true
 [components.driver.oracle.studio]
 system = "Driver"
 model = "quint-specs/driver.qnt"
+broadTestCommand = [
+    "/Users/zarkomilosevic/.cargo/bin/cargo",
+    "test",
+    "--manifest-path",
+    "code/Cargo.toml",
+    "-p",
+    "arc-malachitebft-core-driver",
+    "-p",
+    "arc-malachitebft-core-consensus",
+    "--features",
+    "quint-oracle/enabled",
+    "--",
+    "--skip",
+    "driver_conflicting_proposal_panic",
+]
 invariants = [
     "pending_inputs_always_drained",
     "never_self_equivocate",
@@ -2436,20 +3602,21 @@ observations = ["pruning_removed_state"]
 properties = ["never_panics"]
 
 [components.driver.fingerprints]
-spec = "fnv1a64:888444204cb40fac"
-oracle = "fnv1a64:de68a265658b4268"
-coverage = "fnv1a64:f465c25d2919ec22"
+spec = "fnv1a64:e84daffc6d64c92c"
+oracle = "fnv1a64:3da4f2fe896e6fa7"
+coverage = "fnv1a64:75df1c0c381ac0f1"
 
 [components.driver.fingerprints.code]
-"code/crates/core-driver/src/driver.rs" = "fnv1a64:06251fe87fa4c518"
+"code/crates/core-driver/src/driver.rs" = "fnv1a64:74ec9d9f2e094b03"
 "code/crates/core-driver/src/error.rs" = "fnv1a64:65fc79933e6330c4"
 "code/crates/core-driver/src/input.rs" = "fnv1a64:5dd45c8b3df6371e"
 "code/crates/core-driver/src/lib.rs" = "fnv1a64:036fe54a92beb3a8"
-"code/crates/core-driver/src/mux.rs" = "fnv1a64:73dc816df62cc065"
+"code/crates/core-driver/src/mux.rs" = "fnv1a64:7809d45181bfbbf5"
 "code/crates/core-driver/src/output.rs" = "fnv1a64:9f318cad4cefd36e"
-"code/crates/core-driver/src/proposal_keeper.rs" = "fnv1a64:f4f53c86da81245f"
+"code/crates/core-driver/src/proposal_keeper.rs" = "fnv1a64:ecd616879ffb91f7"
 
 [components.driver.fingerprints.instrumented]
+"code/crates/core-driver/src/driver.rs" = "fnv1a64:74ec9d9f2e094b03"
 "quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
 "quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
 "quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
@@ -2545,7 +3712,7 @@ cardsDone = false
 
 [components.equivocation-detection]
 name = "Equivocation Detection"
-description = "Cross-cutting evidence collection: double-vote detection in the vote keeper, double-proposal detection in the proposal keeper, aggregated into MisbehaviorEvidence at height finalization."
+description = "Collects evidence of validator misbehavior — conflicting votes in the vote keeper (capped at three pairs per validator) and conflicting proposals in the driver's proposal keeper (uncapped) — and hands both to the application as MisbehaviorEvidence in the single Finalize effect at the end of a height."
 role = "cross-cutting"
 rank = 6
 paths = [
@@ -2588,16 +3755,44 @@ adversarySurface = [
 specHints = "Two EvidenceMap types exist: core-votekeeper/src/evidence.rs (DoubleVote, owned here) and core-driver/src/proposal_keeper.rs (DoubleProposal, whose file is hashed under `driver` to avoid double-counting drift). core-consensus/src/types.rs:146-155 defines MisbehaviorEvidence{proposals, votes}, the join point; core-consensus/src/handle/finalize.rs:74-81 is the single drain/emit site and is this component's only output operation. A separate accountability model exists at specs/consensus/accountable-tm/misbehavior.qnt + accTypes.qnt, unwired. The property spans vote-keeper, driver and orchestrator, so it grounds on none of them alone."
 cardRead = false
 connectionsRead = false
-spec = ""
-version = 0
-observationsConfirmed = false
-propertiesConfirmed = false
-confirmedObservations = []
-confirmedProperties = []
+spec = "quint-specs/equivocation-detection.qnt"
+version = 5
+observationsConfirmed = true
+propertiesConfirmed = true
+confirmedObservations = [
+    "vote_equivocation_recorded",
+    "proposal_equivocation_recorded",
+    "vote_evidence_deduped",
+    "proposal_evidence_deduped",
+    "vote_evidence_cap_dropped",
+    "proposal_evidence_exceeds_vote_cap",
+    "evidence_from_two_validators",
+    "equivocator_power_still_tallied",
+    "evidence_drained_at_finalize",
+    "evidence_empty_at_finalize",
+    "evidence_surfaced_mid_round",
+    "proposal_validity_upgraded",
+    "proposal_validity_downgrade_refused",
+    "duplicate_vote_ignored",
+    "unknown_validator_vote_dropped",
+    "non_proposer_proposal_dropped",
+    "node_aborted_on_cross_validator_proposal",
+    "vote_threshold_reached",
+    "evidence_spans_multiple_rounds",
+]
+confirmedProperties = [
+    "equivocating_vote_is_absorbed_not_tallied",
+    "no_value_credited_by_arrival_order",
+    "evidence_pair_is_deduped_in_both_orderings",
+    "evidence_pairs_are_same_validator_conflicts",
+    "evidence_surfaces_only_at_finalize",
+    "evidence_per_validator_is_bounded",
+    "node_never_aborts_on_cross_validator_proposal",
+]
 retiredObservations = []
 retiredProperties = []
-wireConfirmed = false
-setupCompleted = false
+wireConfirmed = true
+setupCompleted = true
 cardsDone = false
 
 [[components.equivocation-detection.productIntent.goals]]
@@ -2657,8 +3852,8 @@ fact = "voteA.value != voteB.value"
 
 [[components.equivocation-detection.productIntent.hazards]]
 claim = "It should be impossible to reach a state where a round holds proposals from two different validators and the node aborts instead of recording evidence."
-decidedAt = 1788193854701
-decision = "confirmed"
+decidedAt = 1789041186712
+decision = "rejected"
 expectations = [
     "`node.status` is `Running` after a proposal whose `validator_address` differs from the round's first proposal",
     "`perRound[0].proposals` never holds proposals from two distinct validators",
@@ -2747,8 +3942,8 @@ value = "Running"
 
 [[components.equivocation-detection.productIntent.hazards]]
 claim = "It should be impossible to reach a state where the value credited with an equivocator's voting power is decided by which of its conflicting votes arrived first."
-decidedAt = 1788193864842
-decision = "confirmed"
+decidedAt = 1789041190904
+decision = "rejected"
 expectations = [
     "`perRound[0].prevotes.weightFor_A` does not depend on the delivery order of `voteA` and `voteB`",
     "An equivocator's `votingPower` contributes to at most one threshold outcome only if that outcome is order-independent",
@@ -2934,8 +4129,8 @@ value = "InMemory"
 
 [[components.equivocation-detection.productIntent.hazards]]
 claim = "It should be impossible to reach a state where one validator's evidence list grows without bound because the height keeps advancing rounds."
-decidedAt = 1788340821751
-decision = "confirmed"
+decidedAt = 1789041181520
+decision = "rejected"
 expectations = [
     "`evidence.votes[v1].length` has an upper bound independent of `driver.round`",
     "Memory held by `EvidenceMap` does not scale with the number of rounds in an undecided height",
@@ -3012,6 +4207,228 @@ value = "0"
 [[components.equivocation-detection.productIntent.hazards.start]]
 field = "v1.behavior"
 value = "EquivocatesEveryRound"
+
+[components.equivocation-detection.oracle]
+format = "quint-oracle-config"
+version = 1
+spec = "quint-specs/equivocation-detection.qnt"
+main = "equivocation_detection"
+eventScope = "equivocation-detection"
+observations = [
+    "vote_equivocation_recorded",
+    "proposal_equivocation_recorded",
+    "vote_evidence_deduped",
+    "proposal_evidence_deduped",
+    "vote_evidence_cap_dropped",
+    "proposal_evidence_exceeds_vote_cap",
+    "evidence_from_two_validators",
+    "equivocator_power_still_tallied",
+    "evidence_drained_at_finalize",
+    "evidence_empty_at_finalize",
+    "evidence_surfaced_mid_round",
+    "proposal_validity_upgraded",
+    "proposal_validity_downgrade_refused",
+    "duplicate_vote_ignored",
+    "unknown_validator_vote_dropped",
+    "non_proposer_proposal_dropped",
+    "node_aborted_on_cross_validator_proposal",
+    "vote_threshold_reached",
+    "evidence_spans_multiple_rounds",
+]
+testCommand = [
+    "/Users/zarkomilosevic/.cargo/bin/cargo",
+    "test",
+    "--tests",
+    "--manifest-path",
+    "code/Cargo.toml",
+    "-p",
+    "arc-malachitebft-core-votekeeper",
+    "-p",
+    "arc-malachitebft-core-driver",
+    "-p",
+    "arc-malachitebft-core-consensus",
+    "--features",
+    "quint-oracle/enabled",
+]
+unguidedStepBudget = 10
+stepReplayBudget = 50
+guardScenarios = true
+
+[components.equivocation-detection.oracle.studio]
+system = "Equivocation Detection"
+model = "quint-specs/equivocation-detection.qnt"
+invariants = [
+    "equivocating_vote_is_absorbed_not_tallied",
+    "no_value_credited_by_arrival_order",
+    "evidence_pair_is_deduped_in_both_orderings",
+    "evidence_pairs_are_same_validator_conflicts",
+    "evidence_surfaces_only_at_finalize",
+    "evidence_per_validator_is_bounded",
+    "node_never_aborts_on_cross_validator_proposal",
+]
+
+[[components.equivocation-detection.oracle.studio.adversaryDispositions]]
+row = "A validator sends two or more distinct valid proposals for one round — ConflictingProposal captured (proposal_keeper.rs:242-252)"
+disposition = "modeled"
+
+[components.equivocation-detection.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "store_proposal",
+    "handle_proposal",
+    "record_proposal_evidence",
+]
+observations = ["proposal_equivocation_recorded"]
+properties = ["evidence_pairs_are_same_validator_conflicts"]
+
+[[components.equivocation-detection.oracle.studio.adversaryDispositions]]
+row = "A validator sends two conflicting votes for one height/round — evidence.add (keeper.rs:274-279)"
+disposition = "modeled"
+
+[components.equivocation-detection.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "apply_vote",
+    "vote_evidence_add",
+]
+observations = [
+    "vote_equivocation_recorded",
+    "equivocator_power_still_tallied",
+]
+properties = [
+    "equivocating_vote_is_absorbed_not_tallied",
+    "no_value_credited_by_arrival_order",
+]
+
+[[components.equivocation-detection.oracle.studio.adversaryDispositions]]
+row = "A third and fourth equivocating message still yields one record per unique unordered pair, not per message"
+disposition = "modeled"
+
+[components.equivocation-detection.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "vote_evidence_add",
+    "record_proposal_evidence",
+]
+observations = [
+    "vote_evidence_deduped",
+    "proposal_evidence_deduped",
+    "vote_evidence_cap_dropped",
+]
+properties = [
+    "evidence_pair_is_deduped_in_both_orderings",
+    "evidence_per_validator_is_bounded",
+]
+
+[[components.equivocation-detection.oracle.studio.adversaryDispositions]]
+row = "Two proposals from *different* validators landing in the same PerRound is a panic, not an attacker-tolerated path (proposal_keeper.rs:108-118) — open question whether it is externally reachable"
+disposition = "modeled"
+
+[components.equivocation-detection.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "store_proposal",
+    "handle_proposal",
+    "drop_non_proposer",
+]
+observations = [
+    "node_aborted_on_cross_validator_proposal",
+    "non_proposer_proposal_dropped",
+]
+properties = ["node_never_aborts_on_cross_validator_proposal"]
+
+[[components.equivocation-detection.oracle.studio.adversaryDispositions]]
+row = "Unbounded evidence growth from a validator equivocating in every round of a long height"
+disposition = "modeled"
+
+[components.equivocation-detection.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "new_round",
+    "record_proposal_evidence",
+    "vote_evidence_add",
+]
+observations = [
+    "proposal_evidence_exceeds_vote_cap",
+    "evidence_spans_multiple_rounds",
+]
+properties = ["evidence_per_validator_is_bounded"]
+
+[[components.equivocation-detection.oracle.studio.intentGroundings]]
+cardId = "proposals-from-two-validators-never-panic-the-node"
+kind = "hazard"
+
+[components.equivocation-detection.oracle.studio.intentGroundings.grounding]
+name = "node_never_aborts_on_cross_validator_proposal"
+type = "invariant"
+
+[[components.equivocation-detection.oracle.studio.intentGroundings]]
+cardId = "arrival-order-of-equivocating-votes-doesn-t-pick-the-tallied-value"
+kind = "hazard"
+
+[components.equivocation-detection.oracle.studio.intentGroundings.grounding]
+name = "no_value_credited_by_arrival_order"
+type = "invariant"
+
+[[components.equivocation-detection.oracle.studio.intentGroundings]]
+cardId = "evidence-per-validator-stays-bounded-within-a-height"
+kind = "hazard"
+
+[components.equivocation-detection.oracle.studio.intentGroundings.grounding]
+name = "evidence_per_validator_is_bounded"
+type = "invariant"
+
+[components.equivocation-detection.fingerprints]
+spec = "fnv1a64:01c03d48e80786c7"
+oracle = "fnv1a64:f7339b282f8625f1"
+coverage = "fnv1a64:01e7c0d3e2740955"
+
+[components.equivocation-detection.fingerprints.code]
+"code/crates/core-consensus/src/handle/finalize.rs" = "fnv1a64:6bfb0c543a70bcf2"
+"code/crates/core-votekeeper/src/evidence.rs" = "fnv1a64:efe23054d716362c"
+
+[components.equivocation-detection.fingerprints.instrumented]
+"quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
+"quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
+"quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
+"quint-specs/oracle-client/rust/src/lib.rs" = "fnv1a64:7d13f0968325a5d8"
+"quint-specs/oracle-client/rust/src/live.rs" = "fnv1a64:0c96171212feb445"
+"quint-specs/oracle-client/rust/src/live/event.rs" = "fnv1a64:b610035d6435249f"
+"quint-specs/oracle-client/rust/src/live/registry.rs" = "fnv1a64:bf4890ead6ba9d19"
+"quint-specs/oracle-client/rust/src/live/transport.rs" = "fnv1a64:8712d4e9bdf961d7"
+"quint-specs/oracle-client/rust/src/live/value.rs" = "fnv1a64:7c5a5dd102552994"
+"quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
+"quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
+
+[[components.equivocation-detection.hardToReproduce]]
+revision = 9
+kind = "code"
+problem = """
+STALE TARGET plus a non-enforceable contract.
+
+(1) Stale. The queued subject is guardId 1617 / ruleId \"1620.1623.1626.1629.1632|\", violatedBy [\"evidence::store_proposal_surfaces_equivocation_to_caller\"]. Those ids do not exist in the current live report (.../reports/26d743ab/equivocation-detection/live/report.json): its guardScenarios list has exactly one entry for `proposalPairCount(pk.evidence) > 0` on `read_proposal_evidence`, guardId 1679 / ruleId \"1682.1685.1688.1691.1694|\", with \"status\":\"untested\", \"testedBy\":[], \"violatedBy\":[]. The named test now replays cleanly: its resolvedPaths show steps store_proposal x3 (rule 1368.1379.1406.1409.1412|1399), record_proposal_evidence, proposal_evidence_add (ghost.proposalPairs=1), then read_proposal_evidence at step 5 with the guard TRUE, matching family [1]. The crossing was an artifact of the earlier instrumentation revision, in which computing the `store_proposal` assertion values went through `ProposalKeeper::evidence()` and emitted a nested read while the map was empty; that was repaired by adding the non-logging `pub(crate) fn evidence_counts(&self)` accessor in code/crates/core-driver/src/proposal_keeper.rs (used by `store_proposal`'s oracle block). The coverage-investigation.json finding for guardId 1679 records the same conclusion, verdict \"benign\", suggestedAction \"none\".
+
+(2) Even if it were live, there is no contract to assert. `ProposalKeeper::evidence()` (core-driver/src/proposal_keeper.rs) returns `&EvidenceMap<Ctx>` — infallible, no Result, no panic. An empty read is legitimate and happens on every height with no misbehaviour (core-consensus/src/handle/finalize.rs log_and_finalize reads it unconditionally); core-driver/tests/it/evidence.rs already does `assert!(keeper.evidence().is_empty())`. A contract-assertion test would have to assert `is_err()` on an API that cannot fail. The guard models the instrumentation choice `if quint_oracle::enabled() && !self.evidence.is_empty()` — \"only report a read that hands out evidence\" — not a rejection the code performs."""
+summary = "Reading the proposal evidence map while it holds nothing cannot be tested as a rejection: the accessor just hands back an empty map, and there is no error to assert. The flagged crossing no longer happens."
+
+[components.equivocation-detection.hardToReproduce.subject]
+kind = "guard-scenario"
+ruleId = "1620.1623.1626.1629.1632|"
+guardId = 1617
+
+[[components.equivocation-detection.hardToReproduce.options]]
+title = "Drop the stale reproduce target"
+gist = "Requeue the finding from the current evidence, where nothing crosses this check any more, instead of keeping the old flag."
+change = "Re-derive the reproduce queue entry from the current live report.json: the only guard scenario for `proposalPairCount(pk.evidence) > 0` on `read_proposal_evidence` is guardId 1679 / ruleId \"1682.1685.1688.1691.1694|\" with violatedBy:[] and status untested. The queued subject (guardId 1617, ruleId \"1620.1623.1626.1629.1632|\") predates the `evidence_counts()` instrumentation fix in code/crates/core-driver/src/proposal_keeper.rs and matches no current rule, so it should be retired rather than reproduced."
+enables = "the Bugs tab stops showing a crossing that the current instrumentation no longer produces"
+cost = "small"
+
+[[components.equivocation-detection.hardToReproduce.options]]
+title = "Model the empty read explicitly"
+gist = "Let the model say that reading the evidence map when it is empty is a normal, allowed thing to do, so it stops looking like a forbidden step."
+change = "In quint-specs/equivocation-detection.qnt, split `read_proposal_evidence` (and symmetrically `read_vote_evidence`) into a guarded `read_proposal_evidence_nonempty` retaining `proposalPairCount(pk.evidence) > 0` and an unguarded `read_proposal_evidence_empty` requiring `proposalPairCount(pk.evidence) == 0`, both frame-preserving. This is a quint-modeling change, not a test-generation one."
+enables = "the empty-read path becomes a modelled transition rather than a guard whose false side can never be a rejection"
+cost = "moderate"
+
+[[components.equivocation-detection.findingVerdicts]]
+subject = "obs:proposal_evidence_exceeds_vote_cap"
+outcome = "bug-reproduced"
+at = 1789060735
 
 [components.example-app]
 name = "Example Application"
@@ -4162,7 +5579,7 @@ coverage = ""
 
 [components.node-config]
 name = "Node Configuration"
-description = "TOML-deserializable node, P2P, discovery and consensus configuration with defaults and lenient deserializers, plus the Prometheus registry wrapper and the PeerId type."
+description = "TOML-deserializable node, P2P, discovery, gossipsub and timeout configuration with its defaults, clamping rules and lenient bool deserializer, plus the Prometheus registry wrapper and the PeerId byte encoding."
 role = "peripheral"
 rank = 18
 paths = [
@@ -4200,17 +5617,337 @@ adversarySurface = [
 specHints = "config/src/lib.rs:37-82 holds the P2pConfig/DiscoveryConfig shapes; utils.rs is the lenient bool deserializer; in-file tests are at config/src/lib.rs:903. Honest assessment from the survey: this is almost entirely passive data with no cross-field validation, so it ranks low as a modelling target — its value is that the bounds other components enforce originate here. metrics/ and peer/ are folded in as the remaining infrastructure leaves; metrics is observational only."
 cardRead = false
 connectionsRead = false
-spec = ""
-version = 0
-observationsConfirmed = false
-propertiesConfirmed = false
-confirmedObservations = []
-confirmedProperties = []
+spec = "quint-specs/node-config.qnt"
+version = 4
+observationsConfirmed = true
+propertiesConfirmed = true
+confirmedObservations = [
+    "mesh_n_defaulted_from_zero",
+    "mesh_n_high_raised_to_twice_mesh_n",
+    "mesh_n_low_recomputed",
+    "mesh_outbound_min_recomputed",
+    "mesh_outbound_min_kept_as_configured",
+    "adjust_reached_zero_mesh_n_low",
+    "channel_names_validated_ok",
+    "channel_name_rejected_as_empty",
+    "channel_names_rejected_as_duplicate",
+    "bool_parsed_from_native_bool",
+    "bool_parsed_from_string",
+    "bool_string_rejected",
+    "pubsub_message_accepted_at_limit",
+    "pubsub_message_rejected_as_oversized",
+    "rpc_message_rejected_as_oversized",
+    "pubsub_limit_below_proposal_size",
+    "pubsub_limit_above_transport_capacity",
+    "peers_only_enabled_with_no_peers",
+    "discovery_enabled_with_a_zero_limit",
+    "timeout_clamped_at_max",
+    "zero_timeout_computed",
+    "timeout_grew_with_round",
+    "registry_created_without_moniker",
+    "registry_labelled_with_moniker",
+    "metrics_registered_once",
+    "metric_registered_twice",
+    "registry_exported",
+    "peer_id_accepted_with_sha256_code",
+    "peer_id_accepted_with_inline_identity_key",
+    "peer_id_accepted_at_inline_key_limit",
+    "peer_id_rejected_as_malformed_multihash",
+    "peer_id_rejected_for_unsupported_code",
+    "peer_id_round_tripped_through_bytes",
+]
+confirmedProperties = [
+    "gossip_mesh_within_documented_bounds",
+    "mesh_adjust_never_underflows",
+    "defaults_alone_are_a_valid_configuration",
+    "accepted_messages_within_configured_limits",
+    "pubsub_limit_is_carriable_and_sufficient",
+    "peers_only_mode_has_peers",
+    "enabled_discovery_has_workable_limits",
+    "computed_timeouts_are_positive_and_capped",
+    "channel_verdict_matches_configured_names",
+    "metric_names_registered_at_most_once",
+    "peer_ids_round_trip_through_bytes",
+    "stored_peer_ids_use_supported_codes",
+]
 retiredObservations = []
 retiredProperties = []
-wireConfirmed = false
-setupCompleted = false
+wireConfirmed = true
+setupCompleted = true
 cardsDone = false
+
+[components.node-config.oracle]
+format = "quint-oracle-config"
+version = 1
+spec = "quint-specs/node-config.qnt"
+main = "node_config"
+eventScope = "node-config"
+observations = [
+    "mesh_n_defaulted_from_zero",
+    "mesh_n_high_raised_to_twice_mesh_n",
+    "mesh_n_low_recomputed",
+    "mesh_outbound_min_recomputed",
+    "mesh_outbound_min_kept_as_configured",
+    "adjust_reached_zero_mesh_n_low",
+    "channel_names_validated_ok",
+    "channel_name_rejected_as_empty",
+    "channel_names_rejected_as_duplicate",
+    "bool_parsed_from_native_bool",
+    "bool_parsed_from_string",
+    "bool_string_rejected",
+    "pubsub_message_accepted_at_limit",
+    "pubsub_message_rejected_as_oversized",
+    "rpc_message_rejected_as_oversized",
+    "pubsub_limit_below_proposal_size",
+    "pubsub_limit_above_transport_capacity",
+    "peers_only_enabled_with_no_peers",
+    "discovery_enabled_with_a_zero_limit",
+    "timeout_clamped_at_max",
+    "zero_timeout_computed",
+    "timeout_grew_with_round",
+    "registry_created_without_moniker",
+    "registry_labelled_with_moniker",
+    "metrics_registered_once",
+    "metric_registered_twice",
+    "registry_exported",
+    "peer_id_accepted_with_sha256_code",
+    "peer_id_accepted_with_inline_identity_key",
+    "peer_id_accepted_at_inline_key_limit",
+    "peer_id_rejected_as_malformed_multihash",
+    "peer_id_rejected_for_unsupported_code",
+    "peer_id_round_tripped_through_bytes",
+]
+testCommand = [
+    "/Users/zarkomilosevic/.cargo/bin/cargo",
+    "test",
+    "--manifest-path",
+    "code/Cargo.toml",
+    "-p",
+    "arc-malachitebft-config",
+    "-p",
+    "arc-malachitebft-metrics",
+    "--features",
+    "quint-oracle/enabled",
+    "--no-fail-fast",
+    "--",
+    "--test-threads=1",
+]
+unguidedStepBudget = 10
+stepReplayBudget = 50
+guardScenarios = true
+
+[components.node-config.oracle.studio]
+system = "Node Configuration"
+model = "quint-specs/node-config.qnt"
+invariants = [
+    "gossip_mesh_within_documented_bounds",
+    "mesh_adjust_never_underflows",
+    "defaults_alone_are_a_valid_configuration",
+    "accepted_messages_within_configured_limits",
+    "pubsub_limit_is_carriable_and_sufficient",
+    "peers_only_mode_has_peers",
+    "enabled_discovery_has_workable_limits",
+    "computed_timeouts_are_positive_and_capped",
+    "channel_verdict_matches_configured_names",
+    "metric_names_registered_at_most_once",
+    "peer_ids_round_trip_through_bytes",
+    "stored_peer_ids_use_supported_codes",
+]
+
+[[components.node-config.oracle.studio.adversaryDispositions]]
+row = "Misconfigured timeouts (zero or enormous) with no cross-field validation in this crate — unlike engine-byzantine's ByzantineConfig::validate()"
+disposition = "modeled"
+
+[components.node-config.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "TimeoutConfigset",
+    "timeout_duration_for",
+]
+observations = [
+    "zero_timeout_computed",
+    "timeout_clamped_at_max",
+    "timeout_grew_with_round",
+]
+properties = ["computed_timeouts_are_positive_and_capped"]
+
+[[components.node-config.oracle.studio.adversaryDispositions]]
+row = "persistent_peers_only enabled with an empty persistent_peers list, which is not checked here"
+disposition = "modeled"
+
+[components.node-config.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["P2pConfigset_persistent_peers"]
+observations = ["peers_only_enabled_with_no_peers"]
+properties = ["peers_only_mode_has_peers"]
+
+[[components.node-config.oracle.studio.adversaryDispositions]]
+row = "A pubsub_max_size larger than the transport can carry, or smaller than a legitimate proposal"
+disposition = "modeled"
+
+[components.node-config.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "P2pConfigset_message_limits",
+    "network_publish_pubsub",
+    "network_send_rpc",
+]
+observations = [
+    "pubsub_limit_below_proposal_size",
+    "pubsub_limit_above_transport_capacity",
+    "pubsub_message_rejected_as_oversized",
+]
+properties = [
+    "pubsub_limit_is_carriable_and_sufficient",
+    "accepted_messages_within_configured_limits",
+]
+
+[[components.node-config.oracle.studio.adversaryDispositions]]
+row = "A discovery concurrency or rate-limit value of zero, disabling discovery silently"
+disposition = "modeled"
+
+[components.node-config.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["DiscoveryConfigset"]
+observations = ["discovery_enabled_with_a_zero_limit"]
+properties = ["enabled_discovery_has_workable_limits"]
+
+[components.node-config.fingerprints]
+spec = "fnv1a64:8bbf03560384cff8"
+oracle = "fnv1a64:80f5b89de598d380"
+coverage = "fnv1a64:99e351826360b932"
+
+[components.node-config.fingerprints.code]
+"code/crates/config/src/lib.rs" = "fnv1a64:6684257867be6fca"
+"code/crates/config/src/utils.rs" = "fnv1a64:9a5b1fbc0dcbde49"
+"code/crates/metrics/src/lib.rs" = "fnv1a64:263404089b922694"
+"code/crates/metrics/src/metrics.rs" = "fnv1a64:7b5b1cb5049798a9"
+"code/crates/metrics/src/registry.rs" = "fnv1a64:0676f56fdced64d4"
+"code/crates/peer/src/lib.rs" = "fnv1a64:6f50920fb709db2f"
+
+[components.node-config.fingerprints.instrumented]
+"quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
+"quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
+"quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
+"quint-specs/oracle-client/rust/src/lib.rs" = "fnv1a64:7d13f0968325a5d8"
+"quint-specs/oracle-client/rust/src/live.rs" = "fnv1a64:0c96171212feb445"
+"quint-specs/oracle-client/rust/src/live/event.rs" = "fnv1a64:b610035d6435249f"
+"quint-specs/oracle-client/rust/src/live/registry.rs" = "fnv1a64:bf4890ead6ba9d19"
+"quint-specs/oracle-client/rust/src/live/transport.rs" = "fnv1a64:8712d4e9bdf961d7"
+"quint-specs/oracle-client/rust/src/live/value.rs" = "fnv1a64:7c5a5dd102552994"
+"quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
+"quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
+
+[[components.node-config.hardToReproduce]]
+revision = 4
+kind = "code"
+problem = "The observation is `state.pubsub_max_size < MIN_PROPOSAL_SIZE` (quint-specs/node-config.qnt:880). Its spec action `P2pConfigset_message_limits` (node-config.qnt:522-529) is UNGUARDED: it installs whatever pubsub_max_size/rpc_max_size the TOML says and the comment says so explicitly (\"No bound is checked against the transport\"). The real code matches exactly: `P2pConfig.pubsub_max_size: ByteSize` (code/crates/config/src/lib.rs:158) is a plain serde field with no validator; the only validation on the P2P config path is `ChannelNames::validate` (lib.rs:80), called from `spawn_network_actor` (code/crates/app/src/spawn.rs:52-56), and it never looks at the size limits. Downstream, `make_network_config` (spawn.rs:268) just does `cfg.p2p.pubsub_max_size.as_u64() as usize` and `gossipsub_config` (code/crates/network/src/behaviour.rs:179-195) passes it to `ConfigBuilder::max_transmit_size`, which accepts 0 — `build().unwrap()` does not fail. So there is NO reject branch and no error API anywhere: `toml::from_str::<P2pConfig>` with `pubsub_max_size = \"0 B\"` returns Ok, and the node starts. A contract-assertion test could only assert a rejection that neither the spec's guard nor the code implements — the spec is faithful to the code here, so this is not a code-vs-model divergence but a missing-validation design gap. Making it testable requires adding a validator (e.g. a `P2pConfig::validate` returning a new error enum next to `ChannelNamesError`, invoked from `spawn_network_actor` alongside `channel_names.validate()`), and then the spec's `P2pConfigset_message_limits` needs the matching guard so the observation becomes a reject rather than an accepted state."
+summary = "A pub-sub size limit too small to carry a proposal is silently accepted: nothing validates it, so a test has no rejection to assert. The node starts and quietly cannot deliver consensus values."
+trackNames = ["pubsub_limit_below_proposal_size"]
+
+[components.node-config.hardToReproduce.subject]
+kind = "observation"
+name = "pubsub_limit_below_proposal_size"
+
+[[components.node-config.hardToReproduce.options]]
+title = "Validate the P2P size limits at config load"
+gist = "Add a check that rejects a pub-sub or RPC size limit too small to carry a proposal, and run it when the network starts, so a test can assert the rejection."
+change = "Add `P2pConfig::validate(&self) -> Result<(), P2pConfigError>` in code/crates/config/src/lib.rs next to `ChannelNames::validate` (lib.rs:80), with a `P2pConfigError` enum modeled on `ChannelNamesError` carrying a `PubsubMaxSizeTooSmall { configured, minimum }` variant (minimum 1 MiB) and the same for rpc_max_size; call it from `spawn_network_actor` (code/crates/app/src/spawn.rs:52) right after `channel_names.validate()`. Then the model's `P2pConfigset_message_limits` (quint-specs/node-config.qnt:522) gains the guard `pubsub_max_size >= MIN_PROPOSAL_SIZE and rpc_max_size >= MIN_PROPOSAL_SIZE` and a reject branch to mirror it."
+enables = "a test can deserialize a P2pConfig with `pubsub_max_size = \"0 B\"` and assert `config.validate().is_err()`, driving the observation as a real reject through the public config API"
+cost = "moderate"
+
+[[components.node-config.hardToReproduce.options]]
+title = "Clamp at the network boundary and report it"
+gist = "Have the network layer refuse to start when the configured message limit is below one proposal, instead of passing zero straight to the gossip layer."
+change = "In `make_network_config`/`spawn_network_actor` (code/crates/app/src/spawn.rs:52-56, 268) return an `eyre!` error when `cfg.p2p.pubsub_max_size.as_u64()` is below 1 MiB, before `Network::spawn`; mirror the bound with a guard on `P2pConfigset_message_limits` in quint-specs/node-config.qnt:522."
+enables = "a test can build a ConsensusConfig with a 0-byte pub-sub limit and assert that spawning the network actor returns an error"
+cost = "small"
+
+[[components.node-config.hardToReproduce]]
+revision = 4
+kind = "code"
+problem = "The observation is `state.pubsub_max_size > TRANSPORT_MAX_SIZE` (quint-specs/node-config.qnt:883), with TRANSPORT_MAX_SIZE a spec-only constant of 16 (MiB) at node-config.qnt:139 that has NO counterpart anywhere in the code. Its action `P2pConfigset_message_limits` (node-config.qnt:522-529) is unguarded and installs any value; the comment states \"No bound is checked against the transport\". The code agrees: `P2pConfig.pubsub_max_size: ByteSize` (code/crates/config/src/lib.rs:158) is a bare serde field, the only P2P validation is `ChannelNames::validate` (lib.rs:80) called from `spawn_network_actor` (code/crates/app/src/spawn.rs:52-56), and `make_network_config` (spawn.rs:268) forwards the raw byte count to `gossipsub_config` → `ConfigBuilder::max_transmit_size` (code/crates/network/src/behaviour.rs:179-195), which accepts an arbitrarily large value; `build().unwrap()` does not fail. Nothing in the network crate enforces a 16 MiB frame cap either — the yamux config at code/crates/network/src/lib.rs:368 is `libp2p::yamux::Config::default` with no window/frame override, and the only `set_max_len` is the unrelated validator-proof codec (crates/network/src/validator_proof/codec.rs:53). So an oversized pubsub limit is accepted by every layer and no error API exists to assert a rejection against; the divergence would only show as a runtime transport failure when a message that large is actually published, which this component's boundary does not reach. To make it testable the code needs a real cap constant plus a validator, and the spec's action then needs the matching guard."
+summary = "A pub-sub size limit larger than the transport can carry is accepted at every layer, so no test has a rejection to assert. Oversized messages fail only later, at send time, on a live connection."
+trackNames = ["pubsub_limit_above_transport_capacity"]
+
+[components.node-config.hardToReproduce.subject]
+kind = "observation"
+name = "pubsub_limit_above_transport_capacity"
+
+[[components.node-config.hardToReproduce.options]]
+title = "Add a transport cap and validate against it"
+gist = "Define the largest message the transport can carry, then reject a bigger configured limit at startup so a test can assert it."
+change = "Introduce `pub const MAX_TRANSPORT_MESSAGE_SIZE: ByteSize = ByteSize::mib(16)` in code/crates/config/src/lib.rs and a `P2pConfig::validate(&self) -> Result<(), P2pConfigError>` beside `ChannelNames::validate` (lib.rs:80) with a `PubsubMaxSizeAboveTransport { configured, maximum }` variant; call it from `spawn_network_actor` (code/crates/app/src/spawn.rs:52) next to `channel_names.validate()`. Then add the guard `pubsub_max_size <= TRANSPORT_MAX_SIZE` with a reject branch to `P2pConfigset_message_limits` (quint-specs/node-config.qnt:522) so the model mirrors it."
+enables = "a test can deserialize a P2pConfig with `pubsub_max_size = \"64 MiB\"` and assert `config.validate().is_err()`, driving the observation as a real reject through the public config API"
+cost = "moderate"
+
+[[components.node-config.hardToReproduce.options]]
+title = "Enforce the cap where gossipsub is built"
+gist = "Have the network layer refuse an oversized transmit size at startup instead of handing it straight to the gossip layer."
+change = "In `gossipsub_config` (code/crates/network/src/behaviour.rs:179) stop using `build().unwrap()` for an out-of-range `max_transmit_size`: check it against a new cap constant in crates/network/src/lib.rs and propagate a `Behaviour::new_with_metrics` error up through `Network::spawn`, so `spawn_network_actor` (code/crates/app/src/spawn.rs:58-62) returns it."
+enables = "a test can spawn the network actor with an oversized pub-sub limit and assert the spawn returns an error rather than a silently misconfigured behaviour"
+cost = "moderate"
+
+[[components.node-config.hardToReproduce]]
+revision = 4
+kind = "code"
+problem = "The observation is `state.persistent_peers_only and state.persistent_peers == Set()` (quint-specs/node-config.qnt:884-886). Its action `P2pConfigset_persistent_peers` (node-config.qnt:539-546) is unguarded — it installs any (peers, peers_only) pair, and its comment (\"config/src/lib.rs:115-122\") is faithful: `persistent_peers: Vec<Multiaddr>` and `#[serde(default)] persistent_peers_only: bool` are bare serde fields in `P2pConfig` (code/crates/config/src/lib.rs:143-148) with no cross-field check. The only P2P validation is `ChannelNames::validate` (lib.rs:80), called from `spawn_network_actor` (code/crates/app/src/spawn.rs:52-56), and it never looks at the peer list. Downstream, `make_network_config` (code/crates/app/src/spawn.rs:213-216) copies `persistent_peers_only` and the peer list into the network/discovery config verbatim; grep over crates for `persistent_peers_only` shows only those two assignments plus test-harness uses (crates/test/app/src/node.rs:622, crates/test/tests/it/persistent_peers_only.rs), never a rejection. So `persistent_peers_only = true` with an empty `persistent_peers` deserializes Ok and the node starts, isolated — there is no reject branch in the spec's guard and no error API in the code to assert one against, so a contract-assertion test would assert behavior neither implements. This is a missing-validation design gap, not a code-vs-model divergence. Testability needs a cross-field validator plus the matching guard on the spec action."
+summary = "Restricting a node to persistent peers while configuring none is accepted silently, so a test has no rejection to assert. The node starts unable to connect to anyone."
+trackNames = ["peers_only_enabled_with_no_peers"]
+
+[components.node-config.hardToReproduce.subject]
+kind = "observation"
+name = "peers_only_enabled_with_no_peers"
+
+[[components.node-config.hardToReproduce.options]]
+title = "Validate the peers-only combination at config load"
+gist = "Reject a config that restricts the node to persistent peers while listing none, so a test can assert the rejection."
+change = "Add `P2pConfig::validate(&self) -> Result<(), P2pConfigError>` in code/crates/config/src/lib.rs beside `ChannelNames::validate` (lib.rs:80), with a `P2pConfigError::PeersOnlyWithoutPeers` variant returned when `self.persistent_peers_only && self.persistent_peers.is_empty()`; call it from `spawn_network_actor` (code/crates/app/src/spawn.rs:52) right after `channel_names.validate()`. Then add the guard `peers_only implies peers != Set()` with a reject branch to `P2pConfigset_persistent_peers` (quint-specs/node-config.qnt:541) so the model mirrors it."
+enables = "a test can deserialize a P2pConfig with `persistent_peers_only = true` and an empty `persistent_peers` and assert `config.validate().is_err()`, driving the observation as a real reject through the public config API"
+cost = "moderate"
+
+[[components.node-config.hardToReproduce.options]]
+title = "Fail the network spawn on an unusable peers-only config"
+gist = "Have starting the network return an error when the node is restricted to persistent peers but has none."
+change = "In `spawn_network_actor` (code/crates/app/src/spawn.rs:52-62), before `make_network_config`, return `eyre!(\"persistent_peers_only requires at least one persistent peer\")` when `consensus_cfg.p2p.persistent_peers_only && consensus_cfg.p2p.persistent_peers.is_empty()`; mirror it with the same guard on `P2pConfigset_persistent_peers` in quint-specs/node-config.qnt:541."
+enables = "a test can build a ConsensusConfig in peers-only mode with no peers and assert that spawning the network actor returns an error"
+cost = "small"
+
+[[components.node-config.hardToReproduce]]
+revision = 4
+kind = "code"
+problem = "The observation is `state.discovery.enabled and (num_outbound_peers == 0 or max_connections_per_ip == 0 or max_peers_per_response == 0 or dial_max_retries == 0)` (quint-specs/node-config.qnt:889-896). Its action `DiscoveryConfigset` (node-config.qnt:531-537) is unguarded and its own comment states the code faithfully: \"Every numeric field takes whatever the file says; nothing rejects a zero.\" In the code, `DiscoveryConfig` (code/crates/config/src/lib.rs:221+) is all bare serde fields with `#[serde(default = \"discovery::default_*\")]` defaults; a TOML section that explicitly writes `enabled = true` and `num_outbound_peers = 0` deserializes Ok (the same shape the existing tests at lib.rs:1143-1186 use), and there is no `DiscoveryConfig::validate` anywhere. The only P2P validation on the startup path is `ChannelNames::validate` (lib.rs:80) from `spawn_network_actor` (code/crates/app/src/spawn.rs:52-56). Downstream the zeros are only ever compared, never divided by or subtracted from, so nothing panics: crates/discovery/src/handlers/peers_management.rs:89 and handlers/bootstrap.rs:24 read `config.num_outbound_peers` in `>=`/`<` tests, handlers/dial.rs:197 compares `retry.count() < config.dial_max_retries`. Discovery therefore just never dials, retries, or accepts, silently. There is no reject branch in the spec's guard and no error API in the code to assert one against, so a contract-assertion test would assert behavior neither implements — a missing-validation design gap, not a code-vs-model divergence. Testability needs a validator on DiscoveryConfig plus the matching guard on the spec action."
+summary = "Peer discovery accepts a zero on any of its limits while enabled, so a test has no rejection to assert. Discovery then silently never dials, retries, or accepts peers."
+trackNames = ["discovery_enabled_with_a_zero_limit"]
+
+[components.node-config.hardToReproduce.subject]
+kind = "observation"
+name = "discovery_enabled_with_a_zero_limit"
+
+[[components.node-config.hardToReproduce.options]]
+title = "Validate the discovery limits at config load"
+gist = "Reject a config that turns discovery on while leaving one of its limits at zero, so a test can assert the rejection."
+change = "Add `DiscoveryConfig::validate(&self) -> Result<(), DiscoveryConfigError>` in code/crates/config/src/lib.rs beside the struct (lib.rs:221), returning a `ZeroLimit(&'static str)` variant when `self.enabled` and any of `num_outbound_peers`, `max_connections_per_ip`, `max_peers_per_response`, `dial_max_retries` is 0; call it from `spawn_network_actor` (code/crates/app/src/spawn.rs:52) next to `channel_names.validate()`. Then add the matching guard with a reject branch to `DiscoveryConfigset` (quint-specs/node-config.qnt:533) so the model mirrors it."
+enables = "a test can deserialize a DiscoveryConfig with `enabled = true` and `num_outbound_peers = 0` and assert `config.validate().is_err()`, driving the observation as a real reject through the public config API"
+cost = "moderate"
+
+[[components.node-config.hardToReproduce.options]]
+title = "Fail the network spawn on an unusable discovery config"
+gist = "Have starting the network return an error when discovery is enabled but one of its limits is zero."
+change = "In `spawn_network_actor` (code/crates/app/src/spawn.rs:52-62), before `make_network_config`, return an `eyre!` error naming the zero field when `consensus_cfg.p2p.discovery.enabled` and any of its four limits is 0; mirror it with the same guard on `DiscoveryConfigset` in quint-specs/node-config.qnt:533."
+enables = "a test can build a ConsensusConfig with discovery enabled and a zero limit and assert that spawning the network actor returns an error"
+cost = "small"
+
+[[components.node-config.findingVerdicts]]
+subject = "obs:adjust_reached_zero_mesh_n_low"
+outcome = "bug-reproduced"
+at = 1788950731
+
+[[components.node-config.findingVerdicts]]
+subject = "obs:zero_timeout_computed"
+outcome = "bug-reproduced"
+at = 1788951963
+
+[[components.node-config.findingVerdicts]]
+subject = "obs:metric_registered_twice"
+outcome = "bug-reproduced"
+at = 1788952032
 
 [components.p2p-network]
 name = "P2P Network"
@@ -5420,6 +7157,11 @@ coverage = ""
 "quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
 "quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
 
+[[components.p2p-network.findingVerdicts]]
+subject = "family:persistent_peer_added_at_runtime|stale_persistent_peer_id_retained"
+outcome = "confirmed"
+at = 1788961145
+
 [components.peer-discovery]
 name = "Peer Discovery"
 description = "Kademlia/random peer selection with a dial / peers-request / connect-request / close action controller, bounded concurrency, request rate limiting and address-poisoning protection."
@@ -5908,8 +7650,8 @@ cardsDone = false
 
 [[components.round-state-machine.productIntent.goals]]
 claim = "It should be possible to prevote a value we are not locked on, when the proposal carries a polka from a round at or above our lock round."
-decidedAt = 1788009824762
-decision = "confirmed"
+decidedAt = 1789041046519
+decision = "rejected"
 expectations = [
     "`prevote_previous` tests `locked.round <= vr` before it ever compares values, so the lock on `w` does not force a nil prevote",
     "`state.locked` is left untouched — only a later `precommit` re-locks",
@@ -5967,8 +7709,8 @@ fact = "proposal.polRound < state.round"
 
 [[components.round-state-machine.productIntent.hazards]]
 claim = "It should be impossible to reach a state where apply panics because a ProposalAndPolkaPrevious carries a proposal whose own round disagrees with the state round."
-decidedAt = 1788009771582
-decision = "confirmed"
+decidedAt = 1789041051789
+decision = "rejected"
 expectations = [
     "`is_valid_pol_round` compares `pol_round` only against `state.round`, never against `proposal.round()`",
     "`assert!(vr < proposal.round())` fails, aborting the process instead of returning `Transition::invalid`",
@@ -6043,8 +7785,8 @@ note = "stale round, never checked"
 
 [[components.round-state-machine.productIntent.hazards]]
 claim = "It should be impossible to reach a state where the emitted decision output names a different round than the one recorded in state.decision."
-decidedAt = 1788009786958
-decision = "confirmed"
+decidedAt = 1789041042253
+decision = "rejected"
 expectations = [
     "`commit` captures `round = state.round` before storing `set_decision(proposal.round(), ...)`",
     "`Output::decision(round, proposal)` reports the state machine's current round, which can exceed `proposal.round()`",
@@ -6210,8 +7952,8 @@ value = "v"
 
 [[components.round-state-machine.productIntent.hazards]]
 claim = "It should be impossible to reach a state where a NewRound input lowers state.round below the round already reached."
-decidedAt = 1788009798834
-decision = "confirmed"
+decidedAt = 1789041059902
+decision = "rejected"
 expectations = [
     "Both `Step::Unstarted, Input::NewRound(round)` arms call `state.update_round(round)` with no comparison against `state.round`",
     "`update_round` also clears `scheduled_timeouts`, so the propose timeout may be scheduled a second time for a round already played",
@@ -6364,8 +8106,8 @@ value = "false"
 
 [[components.round-state-machine.productIntent.hazards]]
 claim = "It should be impossible to reach a state where a node that is not the proposer for the round emits a Proposal output."
-decidedAt = 1788009812975
-decision = "confirmed"
+decidedAt = 1789041032478
+decision = "rejected"
 expectations = [
     "The `(Step::Propose, Input::ProposeValue)` arm guards only on `this_round`; proposership is checked by `debug_assert!(info.is_proposer())`",
     "In a release build the assertion is stripped and `propose` emits a signed proposal from a non-proposer",
@@ -6614,11 +8356,11 @@ type = "invariant"
 [components.round-state-machine.fingerprints]
 spec = "fnv1a64:9f0e33247dc61c3e"
 oracle = "fnv1a64:ae4d6221d9bc3816"
-coverage = ""
+coverage = "fnv1a64:b1b9ff165cdf7a8c"
 
 [components.round-state-machine.fingerprints.code]
 "code/crates/core-state-machine/src/input.rs" = "fnv1a64:be17d0d84ec0be19"
-"code/crates/core-state-machine/src/lib.rs" = "fnv1a64:5f5314f3b45eeb34"
+"code/crates/core-state-machine/src/lib.rs" = "fnv1a64:d31451f14a28106e"
 "code/crates/core-state-machine/src/output.rs" = "fnv1a64:41e5ce5ca409d7f2"
 "code/crates/core-state-machine/src/state.rs" = "fnv1a64:3134f165db6f35b1"
 "code/crates/core-state-machine/src/state_machine.rs" = "fnv1a64:48bc0cf2dcff562e"
@@ -6731,17 +8473,260 @@ adversarySurface = [
 specHints = "signing/src/lib.rs:62-146 holds the Verifier/Signer trait definitions and the domain-separation doc comments — the properties to model are stated there in prose. signing-ed25519/src/lib.rs:35-60 and signing-ecdsa/src/lib.rs:40-69 are the concrete SigningScheme/CurveConfig impls. The serializers/ subtrees are base64/JSON encodings of keys and signatures, round-trip territory. Two open questions from the survey: whether cross-purpose domain separation is structurally enforced or only conventional, and whether the prefix-free validator-proof preimage allows cross-context reuse."
 cardRead = false
 connectionsRead = false
-spec = ""
-version = 0
+spec = "quint-specs/signing.qnt"
+version = 2
 observationsConfirmed = false
 propertiesConfirmed = false
 confirmedObservations = []
 confirmedProperties = []
 retiredObservations = []
 retiredProperties = []
-wireConfirmed = false
+wireConfirmed = true
 setupCompleted = false
 cardsDone = false
+
+[components.signing.oracle]
+format = "quint-oracle-config"
+version = 1
+spec = "quint-specs/signing.qnt"
+main = "signing"
+eventScope = "signing"
+observations = [
+    "vote_signed",
+    "proposal_signed",
+    "extension_signed",
+    "validator_proof_signed",
+    "vote_verify_valid",
+    "vote_verify_invalid_wrong_key",
+    "vote_verify_invalid_wrong_message",
+    "proposal_verify_valid",
+    "proposal_verify_invalid",
+    "extension_verify_valid",
+    "extension_verify_invalid_wrong_scope",
+    "proof_verify_valid",
+    "proof_verify_invalid_tampered",
+    "proof_verify_errors_on_malformed_key",
+    "public_key_decoded",
+    "public_key_decode_rejects_wrong_length",
+    "public_key_decode_rejects_non_curve_point",
+    "public_key_decode_rejects_wrong_curve",
+    "signature_decoded",
+    "signature_decode_rejects_wrong_length",
+    "commit_certificate_accepted",
+    "extended_commit_certificate_accepted_with_extensions",
+    "extended_commit_certificate_accepted_without_extensions",
+    "polka_certificate_accepted",
+    "round_precommit_certificate_accepted",
+    "skip_certificate_accepted_below_quorum",
+    "certificate_rejected_duplicate_vote",
+    "certificate_rejected_unknown_validator",
+    "certificate_rejected_invalid_signature",
+    "certificate_rejected_insufficient_power",
+    "certificate_rejected_missing_extension",
+    "certificate_rejected_unexpected_extension",
+    "certificate_rejected_invalid_extension_signature",
+    "certificate_rejected_invalid_vote_type",
+    "certificate_rejected_voting_power_overflow",
+    "empty_signature_set_rejected",
+    "single_signature_entry_point_used",
+    "key_compromised",
+    "cross_network_signature_accepted",
+]
+testCommand = [
+    "/Users/zarkomilosevic/.cargo/bin/cargo",
+    "test",
+    "--manifest-path",
+    "code/Cargo.toml",
+    "-p",
+    "arc-malachitebft-test",
+    "--test",
+    "unit",
+    "--features",
+    "quint-oracle/enabled",
+    "--",
+    "--skip",
+    "wal_",
+    "--skip",
+    "consensus_liveness",
+    "--skip",
+    "node_supervisor",
+    "--skip",
+    "sync",
+]
+unguidedStepBudget = 10
+stepReplayBudget = 50
+guardScenarios = true
+
+[components.signing.oracle.studio]
+system = "Signing &amp; Verification"
+model = "quint-specs/signing.qnt"
+broadTestCommand = [
+    "/Users/zarkomilosevic/.cargo/bin/cargo",
+    "test",
+    "--manifest-path",
+    "code/Cargo.toml",
+    "-p",
+    "arc-malachitebft-signing-ed25519",
+    "-p",
+    "arc-malachitebft-signing-ecdsa",
+    "--features",
+    "quint-oracle,serde,k256,zeroize",
+]
+invariants = [
+    "verification_accepts_only_signed_preimages",
+    "purposes_are_domain_separated",
+    "extension_signature_binds_every_scope_field",
+    "consensus_preimages_are_network_scoped",
+    "pov_preimage_is_network_agnostic",
+    "verification_is_total_over_all_inputs",
+    "accumulated_power_never_wraps",
+    "accepted_certificate_meets_its_threshold",
+    "accepted_certificate_has_distinct_known_signers",
+    "precommit_round_certificate_has_no_prevotes",
+    "accepted_extended_certificate_honors_extension_policy",
+    "key_and_signature_encoding_round_trip",
+    "vote_signature_is_independent_of_attached_extension",
+]
+
+[[components.signing.oracle.studio.adversaryDispositions]]
+row = "Forged or malleable signatures — verify must return Invalid, never Valid"
+disposition = "modeled"
+
+[components.signing.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "forge_signature",
+    "sign_with_compromised_key",
+    "verify_signed_vote",
+    "verify_validator_proof",
+]
+observations = [
+    "vote_verify_invalid_wrong_message",
+    "proof_verify_invalid_tampered",
+]
+properties = ["verification_accepts_only_signed_preimages"]
+
+[[components.signing.oracle.studio.adversaryDispositions]]
+row = "A public key from the wrong curve presented to a curve-specific verifier — decode_public_key should fail (signing-ecdsa/src/lib.rs:57)"
+disposition = "modeled"
+
+[components.signing.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "decode_public_key_op",
+    "submit_encoded_bytes",
+]
+observations = [
+    "public_key_decode_rejects_wrong_curve",
+    "public_key_decode_rejects_non_curve_point",
+]
+properties = ["verification_is_total_over_all_inputs"]
+
+[[components.signing.oracle.studio.adversaryDispositions]]
+row = "Cross-purpose signature replay: domain separation is by method name rather than an enforced type, so a vote signature reused as a proposal signature is worth checking explicitly"
+disposition = "modeled"
+
+[components.signing.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "verify_signed_proposal",
+    "verify_signed_vote_extension",
+]
+observations = [
+    "proposal_verify_invalid",
+    "extension_verify_invalid_wrong_scope",
+]
+properties = [
+    "purposes_are_domain_separated",
+    "extension_signature_binds_every_scope_field",
+]
+
+[[components.signing.oracle.studio.adversaryDispositions]]
+row = "Cross-network replay of a validator proof, given the deliberate absence of a network domain prefix"
+disposition = "modeled"
+
+[components.signing.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "switch_network",
+    "verify_validator_proof",
+]
+observations = ["cross_network_signature_accepted"]
+properties = [
+    "pov_preimage_is_network_agnostic",
+    "consensus_preimages_are_network_scoped",
+]
+
+[[components.signing.oracle.studio.adversaryDispositions]]
+row = "Malformed key or signature byte lengths — DecodingError (signing-ed25519/src/lib.rs:46-59)"
+disposition = "modeled"
+
+[components.signing.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "submit_encoded_bytes",
+    "decode_signature_op",
+    "decode_public_key_op",
+]
+observations = [
+    "public_key_decode_rejects_wrong_length",
+    "signature_decode_rejects_wrong_length",
+]
+properties = [
+    "verification_is_total_over_all_inputs",
+    "key_and_signature_encoding_round_trip",
+]
+
+[[components.signing.oracle.studio.adversaryDispositions]]
+row = "An all-zero or otherwise degenerate public key"
+disposition = "modeled"
+
+[components.signing.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "submit_encoded_bytes",
+    "decode_public_key_op",
+    "verify_validator_proof",
+]
+observations = [
+    "public_key_decode_rejects_non_curve_point",
+    "proof_verify_errors_on_malformed_key",
+]
+
+[components.signing.fingerprints]
+spec = "fnv1a64:2416735bff74fd47"
+oracle = "fnv1a64:28ad841dbeac3d29"
+coverage = "fnv1a64:74f8824535f1d81a"
+
+[components.signing.fingerprints.code]
+"code/crates/signing-ecdsa/src/curve/k256.rs" = "fnv1a64:08f2a61621665c6c"
+"code/crates/signing-ecdsa/src/curve/mod.rs" = "fnv1a64:e1dd08061601e00b"
+"code/crates/signing-ecdsa/src/curve/p256.rs" = "fnv1a64:347b5b865778c535"
+"code/crates/signing-ecdsa/src/curve/p384.rs" = "fnv1a64:715cdb179a1bc671"
+"code/crates/signing-ecdsa/src/lib.rs" = "fnv1a64:0c9ed57eea172042"
+"code/crates/signing-ecdsa/src/serializers/base64string.rs" = "fnv1a64:d552527cd481f6c7"
+"code/crates/signing-ecdsa/src/serializers/mod.rs" = "fnv1a64:b93976f78efbd176"
+"code/crates/signing-ecdsa/src/serializers/signature.rs" = "fnv1a64:f14f02efdac9c993"
+"code/crates/signing-ecdsa/src/serializers/signing_key.rs" = "fnv1a64:e9999811ee99f9ec"
+"code/crates/signing-ecdsa/src/serializers/verification_key.rs" = "fnv1a64:43690eaf4805826c"
+"code/crates/signing-ed25519/src/lib.rs" = "fnv1a64:d90ad4168d371c0a"
+"code/crates/signing-ed25519/src/serializers/base64string.rs" = "fnv1a64:5e7459687abfa780"
+"code/crates/signing-ed25519/src/serializers/mod.rs" = "fnv1a64:e3479d8cbf662a07"
+"code/crates/signing-ed25519/src/serializers/signing_key.rs" = "fnv1a64:198a23ef56908f10"
+"code/crates/signing-ed25519/src/serializers/verification_key.rs" = "fnv1a64:a2b7c63a6fb6adf0"
+"code/crates/signing/src/error.rs" = "fnv1a64:5b74566936b788ca"
+"code/crates/signing/src/ext.rs" = "fnv1a64:cf384da074d67ee9"
+"code/crates/signing/src/lib.rs" = "fnv1a64:02f6cfc0495941a5"
+"code/crates/test/src/signing.rs" = "fnv1a64:b80bac61f6f09dd0"
+
+[components.signing.fingerprints.instrumented]
+"code/crates/signing/src/quint_ids.rs" = "fnv1a64:8e1332ba666b089a"
+"code/crates/test/src/quint_signing_ids.rs" = "fnv1a64:4c59c65ce681f80c"
+"quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
+"quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
+"quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
+"quint-specs/oracle-client/rust/src/lib.rs" = "fnv1a64:7d13f0968325a5d8"
+"quint-specs/oracle-client/rust/src/live.rs" = "fnv1a64:0c96171212feb445"
+"quint-specs/oracle-client/rust/src/live/event.rs" = "fnv1a64:b610035d6435249f"
+"quint-specs/oracle-client/rust/src/live/registry.rs" = "fnv1a64:bf4890ead6ba9d19"
+"quint-specs/oracle-client/rust/src/live/transport.rs" = "fnv1a64:8712d4e9bdf961d7"
+"quint-specs/oracle-client/rust/src/live/value.rs" = "fnv1a64:7c5a5dd102552994"
+"quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
+"quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
 
 [components.test-harness]
 name = "Test Context & Fixtures"
@@ -7408,8 +9393,8 @@ cardsDone = false
 
 [[components.vote-keeper.productIntent.goals]]
 claim = "It should be possible to receive `PrecommitValue(v)` for a round ahead of the current one, even though the f+1 skip threshold for that round is already met."
-decidedAt = 1788006458570
-decision = "confirmed"
+decidedAt = 1789041127792
+decision = "rejected"
 expectations = [
     "`threshold_to_output` special-cases `(Precommit, Threshold::Value)` inside the future-round branch",
     "`SkipRound(Round(1))` is not re-emitted, because it is already in `emitted_outputs`",
@@ -7748,8 +9733,8 @@ value = "Round(2)"
 
 [[components.vote-keeper.productIntent.hazards]]
 claim = "It should be impossible to reach a state where a round holds a 2f+1 prevote quorum and `PolkaAny` was never emitted for it."
-decidedAt = 1788006247690
-decision = "confirmed"
+decidedAt = 1789041147618
+decision = "rejected"
 expectations = [
     "`compute_threshold` returns `Threshold::Value` as soon as the quorum is on the voted value, and never falls through to the `Any` branch",
     "`apply_vote` emits at most one output per call, so a vote that crosses both thresholds reports only the stronger one",
@@ -7836,8 +9821,8 @@ value = "Set()"
 
 [[components.vote-keeper.productIntent.hazards]]
 claim = "It should be impossible to reach a state where a single validator's repeated equivocation makes the keeper's evidence map grow without bound."
-decidedAt = 1788006441532
-decision = "confirmed"
+decidedAt = 1789041122377
+decision = "rejected"
 expectations = [
     "`EvidenceMap::add` dedupes only an exact repeat of the same ordered pair, so each fresh conflicting value appends a new entry",
     "each entry retains two full `SignedVote`s including signatures",
@@ -7937,8 +9922,8 @@ value = "Round(0)"
 
 [[components.vote-keeper.productIntent.hazards]]
 claim = "It should be impossible to reach a state where a 2f+1 precommit quorum on nil is reported with the same output as a quorum split across different values."
-decidedAt = 1788006469754
-decision = "confirmed"
+decidedAt = 1789041133685
+decision = "rejected"
 expectations = [
     "`threshold_to_output` maps both `(Precommit, Threshold::Any)` and `(Precommit, Threshold::Nil)` to `Output::PrecommitAny`",
     "there is no `PrecommitNil` variant in `Output`, unlike `PolkaNil` on the prevote side",
@@ -8034,8 +10019,8 @@ value = "Set()"
 
 [[components.vote-keeper.productIntent.hazards]]
 claim = "It should be impossible to reach a state where applying a well-formed vote panics the node because the weight arithmetic overflowed."
-decidedAt = 1788006477278
-decision = "confirmed"
+decidedAt = 1789041108125
+decision = "rejected"
 expectations = [
     "`ThresholdParam::is_met` computes `total.checked_mul(self.numerator)` and `.expect(\"attempt to multiply with overflow\")`",
     "the crate denies `clippy::panic` and `clippy::unwrap_used`, yet this path still aborts",

@@ -13,12 +13,313 @@
 module DriverCoverage {
   import driver.* from "driver"
 
+  /// @covered_by restart_with_polka_certificate
+  /// @covered_by restart_with_polka_certificate (run 2)
+  run drivernew =
+    init
+      .then(Drivernew(1, 2, 3, 2, 0, "c"))
+
+  /// @covered_by polka_certified_proposals_bypass_the_bound
+  run drivernewDrivernewMoveToHeightProcess =
+    init
+      .then(Drivernew(1, 1, 1, 1, 0, "a"))
+      .then(Drivernew(1, 1, 1, 1, 0, "b"))
+      .then(move_to_height(1, 1, 1, 1, 0, "b"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Proposal", 1, 0, "0", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "0", -1, "b", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Proposal", 1, 0, "1", -1, "a", true, "Prevote", "Propose"))
+      .expect(proposal_equivocation_recorded)
+      .then(process("PolkaCertificate", 1, 0, "2", -1, "a", true, "Prevote", "Propose"))
+      .expect(vote_equivocation_recorded)
+      .expect(polka_certificate_stored)
+      .then(process("Proposal", 1, 0, "2", -1, "a", true, "Prevote", "Propose"))
+      .then(prune_votes_and_certificates(0))
+      .then(process("Vote", 1, 0, "2", -1, "b", true, "Precommit", "Propose"))
+
+  /// @covered_by flooding_proposals_records_at_most_one_evidence_pair
+  run drivernewDrivernewMoveToHeightProcess2 =
+    init
+      .then(Drivernew(1, 1, 1, 1, 0, "a"))
+      .then(Drivernew(1, 1, 1, 1, 0, "b"))
+      .then(move_to_height(1, 1, 1, 1, 0, "b"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Proposal", 1, 0, "0", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "0", -1, "b", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Proposal", 1, 0, "1", -1, "a", true, "Prevote", "Propose"))
+      .expect(proposal_equivocation_recorded)
+      .then(take_proposal_evidence)
+
   /// @covered_by height_updates::move_to_height_preserves_validator_set
   /// @covered_by height_updates::move_to_height_updates_validator_set
   run drivernewMoveToHeight =
     init
       .then(Drivernew(1, 1, 2, 3, 0, "a"))
-      .then(move_to_height(2, 1, 2, 3, 0))
+      .then(move_to_height(2, 1, 2, 3, 0, "a"))
+
+  /// @covered_by consensus_proposed_values_are_bounded_per_round
+  /// @covered_by disabled_policy_drops_non_nil_precommit_with_extension_before_app_verification
+  /// @covered_by drops_nil_precommit_with_extension_before_wal_append
+  /// @covered_by drops_prevote_with_extension_before_wal_append
+  /// @covered_by prevote_beyond_future_round_lookahead_is_dropped
+  /// @covered_by required_policy_drops_non_nil_precommit_without_extension_before_wal_append
+  /// @covered_by sync_proposed_values_bypass_the_bound
+  /// @covered_by sync_value_response_rejects_missing_extensions_when_policy_is_required
+  /// @covered_by sync_value_response_rejects_present_extensions_when_policy_is_disabled
+  run drivernewMoveToHeightProcess =
+    init
+      .then(Drivernew(1, 1, 1, 1, 0, "a"))
+      .then(move_to_height(1, 1, 1, 1, 0, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+
+  /// @covered_by same_height_reset_preserves_required_vote_extension_policy
+  run drivernewMoveToHeightProcessMoveToHeight =
+    init
+      .then(Drivernew(1, 25, 25, 25, 25, "a"))
+      .then(move_to_height(1, 25, 25, 25, 25, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(move_to_height(1, 25, 25, 25, 25, "a"))
+
+  /// @covered_by sync_value_response_emits_cert_verified_sync_value_when_not_decided
+  run drivernewMoveToHeightProcessProcess =
+    init
+      .then(Drivernew(1, 25, 25, 25, 25, "a"))
+      .then(move_to_height(1, 25, 25, 25, 25, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("CommitCertificate", 1, 0, "2a", -1, "a", true, "Prevote", "Propose"))
+
+  /// @covered_by prevote_at_future_round_lookahead_is_accepted
+  /// @covered_by required_policy_accepts_non_nil_precommit_with_valid_extension
+  run drivernewMoveToHeightProcessProcess2 =
+    init
+      .then(Drivernew(1, 25, 25, 25, 25, "a"))
+      .then(move_to_height(1, 25, 25, 25, 25, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("Vote", 1, 0, "2a", -1, "b", true, "Precommit", "Propose"))
+      .expect(process_returned_no_outputs)
+
+  /// @covered_by polka_certified_proposed_values_bypass_the_bound
+  /// @covered_by polka_certified_value_is_admitted_when_redelivered_after_the_certificate
+  run drivernewMoveToHeightProcessProcess3 =
+    init
+      .then(Drivernew(1, 1, 1, 1, 0, "a"))
+      .then(move_to_height(1, 1, 1, 1, 0, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("PolkaCertificate", 1, 0, "3", -1, "a", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .expect(polka_certificate_stored)
+
+  /// @covered_by future_round_bound_slides_with_consensus_round
+  run drivernewMoveToHeightProcessProcess4 =
+    init
+      .then(Drivernew(1, 25, 25, 25, 25, "a"))
+      .then(move_to_height(1, 25, 25, 25, 25, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("Vote", 1, 3, "1", -1, "b", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Vote", 1, 3, "1", -1, "c", true, "Prevote", "Propose"))
+      .expect(skip_round_certificate_held)
+      .then(process("NewRound", 1, 3, "v", -1, "d", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 13, "1", -1, "b", true, "Prevote", "Propose"))
+
+  /// @covered_by sync_decision_path_verifies_commit_certificate_once
+  /// @covered_by sync_value_response_skips_cert_verified_sync_value_when_already_decided
+  run drivernewMoveToHeightProcessProcess5 =
+    init
+      .then(Drivernew(1, 25, 25, 25, 25, "a"))
+      .then(move_to_height(1, 25, 25, 25, 25, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("CommitCertificate", 1, 0, "2a", -1, "a", true, "Prevote", "Propose"))
+      .then(process("SyncDecision", 1, 0, "2a", -1, "a", true, "Prevote", "Propose"))
+      .expect(height_decided)
+      .expect(decided_via_sync)
+      .then(take_proposal_evidence)
+      .then(take_vote_evidence)
+
+  /// @covered_by equivocation_detection_in_finalization_period::proposal
+  run drivernewMoveToHeightProcessProcess6 =
+    init
+      .then(Drivernew(1, 1, 1, 1, 0, "a"))
+      .then(move_to_height(1, 1, 1, 1, 0, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Prevote", "Propose"))
+      .expect(polka_certificate_stored)
+      .then(prune_votes_and_certificates(0))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Precommit", "Propose"))
+      .expect(height_decided)
+      .then(process("Proposal", 1, 0, "64", -1, "a", true, "Prevote", "Propose"))
+      .expect(proposal_equivocation_recorded)
+
+  /// @covered_by equivocation_detection_in_finalization_period::precommit
+  /// @covered_by equivocation_detection_in_finalization_period::prevote
+  run drivernewMoveToHeightProcessProcess7 =
+    init
+      .then(Drivernew(1, 1, 1, 1, 0, "a"))
+      .then(move_to_height(1, 1, 1, 1, 0, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Prevote", "Propose"))
+      .expect(polka_certificate_stored)
+      .then(prune_votes_and_certificates(0))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Precommit", "Propose"))
+      .expect(height_decided)
+      .then(process("Vote", 1, 0, "64", -1, "a", true, "Precommit", "Propose"))
+      .expect(vote_equivocation_recorded)
+
+  /// @covered_by start_height_during_finalization_period_flushes_finalize_with_evidence
+  run drivernewMoveToHeightProcessProcess8 =
+    init
+      .then(Drivernew(1, 1, 1, 1, 0, "a"))
+      .then(move_to_height(1, 1, 1, 1, 0, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Prevote", "Propose"))
+      .expect(polka_certificate_stored)
+      .then(prune_votes_and_certificates(0))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Precommit", "Propose"))
+      .expect(height_decided)
+      .then(process("Vote", 1, 0, "64", -1, "a", true, "Prevote", "Propose"))
+      .expect(vote_equivocation_recorded)
+      .then(take_proposal_evidence)
+      .then(take_vote_evidence)
+      .then(move_to_height(2, 1, 1, 1, 0, "a"))
+      .then(process("NewRound", 2, 0, "v", -1, "b", true, "Prevote", "Propose"))
+
+  /// @covered_by same_value_proposal_with_different_pol_round_is_recorded_as_evidence
+  /// @replayable false
+  run drivernewMoveToHeightProcessProcess9 =
+    init
+      .then(Drivernew(1, 1, 1, 1, 0, "a"))
+      .then(move_to_height(1, 1, 1, 1, 0, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Prevote", "Propose"))
+      .expect(polka_certificate_stored)
+      .then(prune_votes_and_certificates(0))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Precommit", "Propose"))
+      .expect(height_decided)
+      // unpinned args: pother="270f", pother_pol=0, ppol=-1, pproposer="a", pround=0, pvalue="270f"
+      .then(record_proposal_evidence)
+      .expect(proposal_equivocation_recorded)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+
+  /// @covered_by repeated_same_value_equivocating_proposal_is_deduplicated
+  /// @replayable false
+  run drivernewMoveToHeightProcessProcess10 =
+    init
+      .then(Drivernew(1, 1, 1, 1, 0, "a"))
+      .then(move_to_height(1, 1, 1, 1, 0, "a"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .expect(multi_output_cascade)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Prevote", "Propose"))
+      .expect(polka_certificate_stored)
+      .then(prune_votes_and_certificates(0))
+      .then(process("Vote", 1, 0, "270f", -1, "a", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "b", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "270f", -1, "c", true, "Precommit", "Propose"))
+      .expect(height_decided)
+      // unpinned args: pother="270f", pother_pol=0, ppol=-1, pproposer="a", pround=0, pvalue="270f"
+      .then(record_proposal_evidence)
+      .expect(proposal_equivocation_recorded)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      // unpinned args: pother="270f", pother_pol=0, ppol=-1, pproposer="a", pround=0, pvalue="270f"
+      .then(record_proposal_evidence)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+      // unpinned args: pother="270f", pother_pol=0, ppol=-1, pproposer="a", pround=0, pvalue="270f"
+      .then(record_proposal_evidence)
+      .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
+
+  /// @covered_by required_policy_errors_before_signing_local_precommit_without_extension
+  run drivernewMoveToHeightProcessProcess11 =
+    init
+      .then(Drivernew(1, 25, 25, 25, 25, "b"))
+      .then(move_to_height(1, 25, 25, 25, 25, "b"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Proposal", 1, 0, "2a", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "2a", -1, "b", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Vote", 1, 0, "2a", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "2a", -1, "c", true, "Prevote", "Propose"))
+      .expect(polka_certificate_stored)
+      .then(prune_votes_and_certificates(0))
+
+  /// @covered_by disabled_policy_signs_local_precommit_without_asking_for_extension
+  run drivernewMoveToHeightProcessProcess12 =
+    init
+      .then(Drivernew(1, 25, 25, 25, 25, "b"))
+      .then(move_to_height(1, 25, 25, 25, 25, "b"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Proposal", 1, 0, "2a", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "2a", -1, "b", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Vote", 1, 0, "2a", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "2a", -1, "c", true, "Prevote", "Propose"))
+      .expect(polka_certificate_stored)
+      .then(prune_votes_and_certificates(0))
+      .then(process("Vote", 1, 0, "2a", -1, "b", true, "Precommit", "Propose"))
+
+  /// @covered_by restart_with_round_certificate
+  run drivernewMoveToHeightProcessProcess13 =
+    init
+      .then(Drivernew(1, 2, 3, 2, 0, "c"))
+      .then(move_to_height(1, 2, 3, 2, 0, "c"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("TimeoutElapsed", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "Nil", -1, "c", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Vote", 1, 0, "Nil", -1, "a", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "Nil", -1, "b", true, "Precommit", "Propose"))
+      .expect(precommit_round_certificate_held)
+      .then(Drivernew(1, 2, 3, 2, 0, "c"))
+      .then(move_to_height(1, 2, 3, 2, 0, "c"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("TimeoutElapsed", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "Nil", -1, "c", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "Nil", -1, "a", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "Nil", -1, "b", true, "Precommit", "Propose"))
 
   /// @covered_by basic::driver_steps_no_value_to_propose
   run drivernewProcess =
@@ -51,6 +352,7 @@ module DriverCoverage {
       .expect(height_mismatch_rejected)
 
   /// @covered_by basic::driver_steps_not_proposer_other_round
+  /// @covered_by extra::driver_propose_value_by_non_proposer_is_rejected
   /// @covered_by extra::driver_propose_value_when_not_proposer_is_invalid
   run drivernewProcessProcess3 =
     init
@@ -296,7 +598,7 @@ module DriverCoverage {
       .then(process("CommitCertificate", 1, 1, "270f", -1, "a", true, "Prevote", "Propose"))
       .expect(skip_round_certificate_held)
       .expect(height_decided)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::polka_certificate_stored_after_skip_round_suppresses_polka_value
   run drivernewProcessProcessProcess16 =
@@ -337,7 +639,7 @@ module DriverCoverage {
       .expect(multi_output_cascade)
       .then(process("Proposal", 1, 1, "270f", -1, "a", true, "Prevote", "Propose"))
       .expect(height_decided)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::driver_steps_decide_current_with_no_locked_no_valid
   run drivernewProcessProcessProcess19 =
@@ -349,7 +651,7 @@ module DriverCoverage {
       .then(process("Vote", 1, 0, "270f", -1, "b", true, "Precommit", "Propose"))
       .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
       .expect(height_decided)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::driver_steps_polka_any_then_proposal_other
   /// @covered_by extra::driver_steps_polka_nil_and_timeout_propose
@@ -413,7 +715,7 @@ module DriverCoverage {
       .then(process("Vote", 1, 1, "270f", -1, "b", true, "Precommit", "Propose"))
       .expect(skip_round_certificate_held)
       .expect(height_decided)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::driver_step_change_mux_with_proposal_and_polka
   run drivernewProcessProcessProcess25 =
@@ -486,7 +788,7 @@ module DriverCoverage {
       .expect(multi_output_cascade)
       .then(process("Proposal", 1, 1, "270f", -1, "a", true, "Prevote", "Propose"))
       .expect(height_decided)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::commit_certificate_skip_round_then_timeout_precommit_stores_round_certificates
   run drivernewProcessProcessProcess30 =
@@ -536,7 +838,7 @@ module DriverCoverage {
       .then(process("SyncDecision", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
       .expect(height_decided)
       .expect(decided_via_sync)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::driver_decision_is_not_overwritten_by_a_later_conflicting_commit
   run drivernewProcessProcessProcess34 =
@@ -688,7 +990,7 @@ module DriverCoverage {
       .then(process("Vote", 1, 0, "270f", -1, "a", true, "Precommit", "Propose"))
       .then(process("Vote", 1, 0, "270f", -1, "b", true, "Precommit", "Propose"))
       .expect(height_decided)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::driver_steps_decide_previous_with_no_locked_no_valid
   run drivernewProcessProcessProcess44 =
@@ -707,7 +1009,7 @@ module DriverCoverage {
       .then(process("NewRound", 1, 1, "v", -1, "b", true, "Prevote", "Propose"))
       .then(process("Proposal", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
       .expect(height_decided)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::driver_steps_polka_previous_with_no_locked
   run drivernewProcessProcessProcess45 =
@@ -743,7 +1045,7 @@ module DriverCoverage {
       .then(process("Vote", 1, 0, "2a", -1, "b", true, "Precommit", "Propose"))
       .then(process("Vote", 1, 0, "2a", -1, "a", true, "Precommit", "Propose"))
       .expect(height_decided)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::invalid_proposal_becomes_valid_decision_via_certificate
   /// @covered_by extra::invalid_proposal_becomes_valid_decision_via_votes
@@ -759,7 +1061,7 @@ module DriverCoverage {
       .then(process("Proposal", 1, 0, "270f", -1, "b", false, "Prevote", "Propose"))
       .then(process("CommitCertificate", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
       .expect(height_decided)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by extra::driver_equivocate_vote
   run drivernewProcessProcessProcess48 =
@@ -908,7 +1210,7 @@ module DriverCoverage {
       .then(process("Proposal", 1, 0, "270f", -1, "b", true, "Prevote", "Propose"))
       .expect(height_decided)
       .expect(proposal_validity_upgraded)
-      .then(move_to_height(2, 2, 3, 2, 0))
+      .then(move_to_height(2, 2, 3, 2, 0, "c"))
 
   /// @covered_by basic::driver_steps_not_proposer_timeout_multiple_rounds
   run drivernewProcessProcessProcess58 =
@@ -954,9 +1256,63 @@ module DriverCoverage {
       .then(process("Proposal", 1, 2, "270f", 0, "a", true, "Prevote", "Propose"))
       .then(process("Vote", 1, 0, "270f", -1, "a", true, "Prevote", "Propose"))
 
-  /// @covered_by extra::state_machine_decision_is_not_overwritten_by_a_conflicting_commit
-  /// @covered_by extra::state_machine_get_value_then_stray_prevote_timeout_then_precommit_timeout_granted
+  /// @covered_by cap_exempt_proposal_is_stored_beyond_the_cap
+  /// @covered_by evidence::store_proposal_surfaces_equivocation_to_caller
+  /// @covered_by evidence::test_proposal_evidence_into_iterator_and_len
   /// @covered_by extra::state_machine_polka_previous_with_stale_proposal_round_is_invalid
+  /// @covered_by full_proposal_keeper_tests
+  /// @covered_by mixed_entry_bucket_caps_third_distinct_proposal
+  /// @covered_by prior_valid_is_not_downgraded_by_later_invalid_at_other_round
+  /// @covered_by store_proposal_caps_distinct_entries_per_round
+  /// @covered_by store_proposal_surfaces_equivocation_against_proposal_only_entry
+  /// @covered_by test_proposal_evidence_deduplication
+  /// @covered_by test_proposal_evidence_deduplication (run 2)
+  /// @covered_by test_proposal_evidence_deduplication (run 3)
+  /// @covered_by test_proposal_evidence_deduplication (run 4)
+  /// @covered_by test_proposal_evidence_deduplication (run 5)
+  /// @covered_by validity_reconciles_uniformly_across_value_only_and_full
+  /// @covered_by validity_upgrade_propagates_to_all_higher_round_full_entries
+  /// @covered_by validity_upgrade_propagates_to_higher_round_full_entry
+  /// @covered_by would_append_distinct_reports_when_the_cap_is_reached
   run initialState =
     init
+
+  /// @covered_by restart_with_polka_certificate::pre_crash
+  run moveToHeightProcessProcessProcess =
+    init
+      .then(move_to_height(1, 2, 3, 2, 0, "c"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("TimeoutElapsed", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "Nil", -1, "c", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Vote", 1, 0, "Nil", -1, "a", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "Nil", -1, "b", true, "Precommit", "Propose"))
+      .expect(precommit_round_certificate_held)
+      .then(process("TimeoutElapsed", 1, 0, "v", -1, "a", true, "Prevote", "Precommit"))
+      .then(process("NewRound", 1, 1, "v", -1, "b", true, "Prevote", "Propose"))
+      .then(process("PolkaCertificate", 1, 0, "37a5", -1, "a", true, "Prevote", "Propose"))
+      .expect(vote_equivocation_recorded)
+      .expect(polka_certificate_stored)
+      .then(process("Proposal", 1, 1, "37a5", 0, "b", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 1, "37a5", -1, "c", true, "Prevote", "Propose"))
+
+  /// @covered_by restart_with_polka_certificate::wal_replay
+  run moveToHeightProcessProcessProcess2 =
+    init
+      .then(move_to_height(1, 2, 3, 2, 0, "c"))
+      .then(process("NewRound", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("TimeoutElapsed", 1, 0, "v", -1, "a", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 0, "Nil", -1, "c", true, "Prevote", "Propose"))
+      .expect(process_returned_no_outputs)
+      .then(process("Vote", 1, 0, "Nil", -1, "a", true, "Precommit", "Propose"))
+      .then(process("Vote", 1, 0, "Nil", -1, "b", true, "Precommit", "Propose"))
+      .expect(precommit_round_certificate_held)
+      .then(process("TimeoutElapsed", 1, 0, "v", -1, "a", true, "Prevote", "Precommit"))
+      .then(process("NewRound", 1, 1, "v", -1, "b", true, "Prevote", "Propose"))
+      .then(process("PolkaCertificate", 1, 0, "37a5", -1, "a", true, "Prevote", "Propose"))
+      .expect(vote_equivocation_recorded)
+      .expect(polka_certificate_stored)
+      .then(process("Proposal", 1, 1, "37a5", 0, "b", true, "Prevote", "Propose"))
+      .then(process("Vote", 1, 1, "37a5", -1, "c", true, "Prevote", "Propose"))
+      .then(process("TimeoutElapsed", 1, 1, "v", -1, "a", true, "Prevote", "Propose"))
 }

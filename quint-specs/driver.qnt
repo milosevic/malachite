@@ -154,7 +154,15 @@ module driver {
 
   /// Two abstract symbols plus every concrete ValueId the driver's integration
   /// suite produces, rendered the way the code renders them (lower-case hex).
-  pure val VALUES: Set[Value] = Set("v", "w", "2a", "64", "c8", "1e61", "22b8", "270f")
+  pure val VALUES: Set[Value] = Set(
+    "v", "w",
+    // core-consensus per-round-cap loops: values 0..6 and the certified 3 / 4.
+    "0", "1", "2", "3", "4", "5", "6", "7",
+    // The proposal / proposed-value literals of both integration suites.
+    "a", "14", "1e", "28", "2a", "64", "c8", "37a5", "1e61", "22b8", "270f",
+    // The per-round equivocation sweep: 100+r and 200+r for r in 0..4.
+    "65", "66", "67", "c9", "ca", "cb",
+  )
   /// The four equal-power validators of the driver's integration suite, plus "e",
   /// an address that is NOT in the validator set (the Error::ValidatorNotFound and
   /// Error::ProposerNotFound surface).
@@ -167,7 +175,7 @@ module driver {
   /// so the whole set travels as primitive picks a logged event can pin.
   /// Every voting power the driver's integration suite installs, plus 0 for an
   /// absent slot.
-  pure val WEIGHTS: Set[int] = Set(0, 1, 2, 3, 5, 6, 7, 10, 20, 50)
+  pure val WEIGHTS: Set[int] = Set(0, 1, 2, 3, 5, 6, 7, 10, 20, 25, 50)
   pure def mkVSet(w0: int, w1: int, w2: int, w3: int): Addr -> int =
     Set(("a", w0), ("b", w1), ("c", w2), ("d", w3))
       .filter(e => e._2 > 0)
@@ -180,9 +188,13 @@ module driver {
   pure val QUORUM_SIGNERS: Set[Addr] = Set("a", "b", "c")
 
   pure val HEIGHTS: Set[Height] = Set(1, 2)
-  pure val ROUNDS: Set[Round] = Set(0, 1, 2, 3, 5)
-  /// Includes Round::Nil so a rewind / prune down to Nil stays expressible.
-  pure val ROUND_BAND: Set[Round] = Set(-1, 0, 1, 2, 3, 4, 5, 6)
+  pure val ROUNDS: Set[Round] = Set(0, 1, 2, 3, 4, 5)
+  /// Includes Round::Nil so a rewind / prune down to Nil stays expressible, and
+  /// the future-round-lookahead ceilings core-consensus drives votes at:
+  /// MAX_FUTURE_ROUND_LOOKAHEAD is 10, so a node at round 0 sees 10 / 11 and a
+  /// node at round 3 sees 13 / 14 (params.rs:20, future_round_bound.rs).
+  pure val ROUND_BAND: Set[Round] =
+    Set(-1, 0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 13, 14)
   /// pol_round domain deliberately includes Nil and rounds at/above the proposal's
   /// own round, so the pol-round branches of the multiplexer stay falsifiable.
   pure val POL_ROUNDS: Set[Round] = Set(-1, 0, 1, 2, 3)
@@ -553,6 +565,9 @@ module driver {
     outputCount: int,
     // stepRank of the current round-state step, as a scalar the oracle can pin.
     stepRankNow: int,
+    // The number of recorded proposal-equivocation pairs, as a scalar the
+    // oracle can pin.
+    propEvidenceCount: int,
     // Every own vote we have ever emitted, in order.
     castVotes: List[SVote],
     // SyncDecision decisions we have taken: (round, value).
@@ -1064,6 +1079,7 @@ module driver {
       sinceMove: dr.sinceMove + 1,
       outputCount: dr.outputs.length(),
       stepRankNow: stepRank(dr.rs.step),
+      propEvidenceCount: dr.propEvidence.size(),
       everCommittedHeight: if (dr.rs.step == Commit) height(dr) else dr.everCommittedHeight }
 
   //--------------------------------------------------------------------------
@@ -1097,6 +1113,7 @@ module driver {
       validityUpgraded: false,
       outputCount: 0,
       stepRankNow: 0,
+      propEvidenceCount: 0,
       castVotes: List(),
       syncDecided: Set(),
       firstDecision: NoRV,
@@ -1172,10 +1189,14 @@ module driver {
 
   /// driver.rs move_to_height — the full per-height reset. The whole replacement
   /// membership travels as one parameter, so replay never has to search it.
-  action move_to_height(height: Height, w0: int, w1: int, w2: int, w3: int): bool = all {
+  /// `address` is the node's own address, unchanged by the reset: it travels so
+  /// that a trace starting at a move_to_height still pins who "we" are.
+  action move_to_height(height: Height, w0: int, w1: int, w2: int, w3: int,
+                        address: Addr): bool = all {
     val validator_set = mkVSet(w0, w1, w2, w3)
     d' = withLineage({
       ...d,
+      address: address,
       validatorSet: validator_set,
       proposer: NoAddr,
       vk: newVK(validator_set),
@@ -1312,7 +1333,8 @@ module driver {
       nondet w1 = WEIGHTS.oneOf()
       nondet w2 = WEIGHTS.oneOf()
       nondet w3 = WEIGHTS.oneOf()
-      move_to_height(height, w0, w1, w2, w3)
+      nondet address = VSET.oneOf()
+      move_to_height(height, w0, w1, w2, w3, address)
     },
     {
       nondet height = HEIGHTS.oneOf()
@@ -1343,14 +1365,21 @@ module driver {
           { height: height(d), round: pround, value: pvalue, polRound: ppol,
             proposer: pproposer }, validity)
       },
+      // The pair a caller records always comes from ONE validator in ONE round;
+      // the two proposals differ in value, in pol_round, or in both. The picks
+      // are primitives so a logged event pins every one of them by name.
       {
         nondet pround = ROUNDS.oneOf()
         nondet pvalue = VALUES.oneOf()
+        nondet ppol = POL_ROUNDS.oneOf()
         nondet pother = VALUES.oneOf()
+        nondet pother_pol = POL_ROUNDS.oneOf()
         nondet pproposer = ADDRS.oneOf()
         record_proposal_evidence(
-          { height: height(d), round: pround, value: pvalue, polRound: -1, proposer: pproposer },
-          { height: height(d), round: pround, value: pother, polRound: -1, proposer: pproposer })
+          { height: height(d), round: pround, value: pvalue, polRound: ppol,
+            proposer: pproposer },
+          { height: height(d), round: pround, value: pother, polRound: pother_pol,
+            proposer: pproposer })
       },
     },
   }
