@@ -30,4 +30,5 @@ thiserror = { workspace = true, default-features = false }
 serde = { workspace = true, default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
+malachitebft-test = { workspace = true }
 rand = { workspace = true }

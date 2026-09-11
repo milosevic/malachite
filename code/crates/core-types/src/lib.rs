@@ -14,6 +14,7 @@
 extern crate alloc;
 
 mod certificate;
+mod consensus_protocol;
 mod context;
 mod error;
 mod height;
@@ -68,6 +69,7 @@ pub use certificate::{
     ExtendedCommitCertificate, ExtendedCommitSignature, PolkaCertificate, PolkaSignature,
     RoundCertificate, RoundCertificateType, RoundSignature, ValueResponse,
 };
+pub use consensus_protocol::{ConsensusProtocol, InadequateValidatorSet};
 pub use context::Context;
 pub use error::BoxError;
 pub use height::Height;
