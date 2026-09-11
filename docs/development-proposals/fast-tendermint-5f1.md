@@ -137,6 +137,35 @@ making sync unsound in both directions).
 **Recommendation:** genesis-selected mode, resolved at compile time or node construction, with a
 hard startup check that all nodes agree. Classic stays the default. Never a runtime toggle.
 
+### Hard constraint (Zarko, 2026-09-11): BOTH protocols stay available
+
+Adding `n > 5f` must not take `n > 3f` away. Users keep the classic protocol; the fast one is an
+additional option they may select. Two consequences that override anything below:
+
+- **Nothing is deleted from the classic path.** Where this document says a construct "dies" or is
+  "removed" — `SkipRound`, the `honest` / `f+1` threshold, the polka family, the prevote step,
+  `TimeoutKind::Prevote` — read it as *absent from the fast implementation*, never as removed from
+  the shared or classic code. `ThresholdParams` keeps `quorum` and `honest` exactly as they are.
+- **Therefore: add alongside, never mutate in place.** Each affected layer gets a parallel fast
+  implementation rather than a mode flag inside the classic one. Already done this way for the two
+  layers built so far:
+
+| Layer | Classic (untouched) | Fast (added) |
+| --- | --- | --- |
+| round state machine | `core-state-machine/src/state_machine.rs` | `core-state-machine/src/fast/` |
+| vote keeper | `core-votekeeper/src/keeper.rs` | `core-votekeeper/src/fast/` |
+| thresholds | `ThresholdParams { quorum, honest }` | `fast::params::FastThresholdParams { decision, quorum }` |
+
+**This is measured, not asserted.** After the fast round state machine landed at `e6e07b6f`,
+Studio's re-sync of `round-state-machine` replayed 89 tests and kept all 7 properties and 33
+observations confirmed, with zero new spec gaps — see ledger entry F-17. The classic protocol is
+demonstrably unaffected.
+
+**Still open:** how a user selects a protocol. A `ConsensusProtocol` choice has to reach the driver
+and orchestrator so they instantiate the matching state machine and keeper, with a startup check
+that every node in a validator set agrees. Nothing selects anything yet — the fast modules compile
+but nothing constructs them.
+
 ---
 
 ## 2. Component-by-component impact
@@ -156,10 +185,11 @@ current code.
 
 ### 2.1 `core-types` — thresholds, certificates, proposals
 
-`core-types/src/threshold.rs`. `ThresholdParams` today is `{quorum: 2/3, honest: 1/3}`. The fast
-variant needs `{decision: 4/5, quorum: 2/5}` and **no honest param**. So: add a `decision` field,
-repurpose `quorum`, and make the absence of `honest` explicit rather than leaving a dead 1/5 value
-that invites a resurrected `SkipRound`. `threshold_params` is already plumbed as data
+`core-types/src/threshold.rs`. `ThresholdParams` stays exactly as it is —
+`{quorum: 2/3, honest: 1/3}` — because the classic protocol still uses it. The fast variant gets a
+**separate** `FastThresholdParams { decision: 4/5, quorum: 2/5 }`, already implemented in
+`core-votekeeper/src/fast/params.rs`. It deliberately has no `honest` field, so a `SkipRound`
+mechanism cannot be reintroduced into the fast path by accident. `threshold_params` is already plumbed as data
 (`Params<Ctx>` → `core-consensus/src/state.rs:75` → `Driver::new` at `core-driver/src/driver.rs:87`
 → `VoteKeeper::new` at `:90` and `:146`), and nothing hardcodes 2/3 outside `threshold.rs`.
 
@@ -184,7 +214,8 @@ The fast protocol needs **two thresholds over the same precommit tally in the sa
 
 Changes: distinct outputs for `2f+1`-for-value vs `n−f`-for-value, plus an `n−f`-for-any (L39);
 independent latching, so `emit_at_most_once_per_round` is restated per (round, threshold) rather
-than per (round, vote type); `PolkaAny`/`PolkaNil`/`PolkaValue` and **`SkipRound`** all die.
+than per (round, vote type). The fast keeper has no polka family and no `SkipRound`; the classic
+keeper keeps both, untouched.
 
 Properties needing re-derivation: `polka_value_needs_quorum`,
 `polka_any_reported_on_prevote_quorum`, `precommit_value_reported_on_quorum`,

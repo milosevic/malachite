@@ -245,6 +245,37 @@ Studio finding; that needs the owner. Statuses below are mine, not Studio's.
   That needs `survey_components` to pick up `fast/`.
 - **Status:** understood. The verification gap below is unchanged.
 
+## F-18 — `ValidatorSet::new`'s overflow check is not an invariant of the type
+
+- **Anchor:** found by the `core-types-domain` worker at `e237290b`
+- **Component:** `core-types-domain`
+- **Where:** `code/crates/core-types/src/validator_set.rs` (test-crate impl)
+- **Behavior:** the `validators` field is **public**, so `ValidatorSet::new`'s total-power
+  overflow check can be bypassed entirely by constructing the struct directly. The existing
+  test `invalid_commit_certificate_signed_voting_power_overflow` does exactly that with
+  `[u64::MAX, 1]`, and the constructor never runs. Any caller doing the same gets no
+  overflow protection; only the verifier's defensive `checked_add` catches it.
+- **Why it matters:** the constructor reads like a validated entry point and is not one.
+  It also forced a modelling concession — the invariant had to be scoped to sets actually
+  built through `new`.
+- **Status:** open, undecided. Worth a look independent of whether this component finishes
+  wiring.
+
+## F-19 — Studio's review queue is the wall-clock bottleneck, not the modelling
+
+- **Anchor:** observed across 09-10/09-11
+- **Behavior:** review requests time out without recording a decision, and duplicates queue
+  up behind them. On `core-types-domain` the worker reported **six** timed-out
+  `request_review` calls; the design review took four attempts. Separately, my own
+  `advance_component` rejections were consumed by **orphaned queued copies** rather than
+  reaching the live worker — three consecutive calls re-presented the same artifact with
+  `addressed_feedback: []` and different artifact ids, so a scope instruction never landed.
+- **Consequence:** a scope reduction the owner asked for could not be delivered, and the
+  component proceeded at its original width (34 actions / 35 observations).
+- **Not a code defect.** Recorded because it distorts any measurement of how much Studio
+  speeds development up: the modelling, instrumentation and validation all ran fine.
+- **Status:** worth reporting upstream.
+
 ---
 
 ## Open verification gaps (not findings, but worth tracking)
