@@ -14,6 +14,60 @@ observation.
 **Nothing in here has been decided.** No `set_finding` verdict has been recorded for any
 Studio finding; that needs the owner. Statuses below are mine, not Studio's.
 
+## Index — every bug, its source, and its fix
+
+Sorted by severity. **Source** says who found it, which is the most interesting column:
+no single check caught everything, and the two most severe bugs were found by the
+independent reviewer, not by Studio or by the tests.
+
+| ID | Bug | Source | Severity | Found against | Fixed in | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| F-24 | Decided value overwritten after a round change — **agreement violation** | Studio (property + generated test) | critical | `85d486e2` | `e600629e`, `99c8468c` | **fixed** |
+| F-22a | A node could **vote twice in one round** (self-equivocation) | reviewer | critical | `99c8468c` | `7dbe76b6` | **fixed** |
+| F-22b | `set_valid` used `<` where L29-L30 needs `≤`; node votes for values the paper forbids | reviewer | high (safety) | `99c8468c` | `7dbe76b6` | **fixed** |
+| F-22c | L39 precommit timeout never armable for a later round | reviewer | high (liveness) | `99c8468c` | `7dbe76b6` | **fixed** |
+| F-22d | `WaitForValid` unimplementable; every wait burned its full timeout | reviewer | medium (liveness) | `99c8468c` | `7dbe76b6` | **fixed** |
+| F-25 | `State` invariants bypassable through public mutators | Studio (model read) | high | `85d486e2` | `99c8468c` | **fixed**, partially — fields still `pub` |
+| F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
+| F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
+| F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
+| F-07 | Instrumentation could manufacture a preimage collision (`Nil` shared an index) | Studio gate review | medium | pre-landing | at the gate | **fixed** |
+| F-09 | `driver` oracle exited 127 for the component's entire life — 0 tests ever | me (oracle run) | high (process) | pre-`ab36a137` | re-wire | **fixed** |
+
+### Open — in Malachite's existing code, not the 5f+1 work
+
+| ID | Bug | Source | Severity | Found against | Status |
+| --- | --- | --- | --- | --- | --- |
+| F-01 | Proposal evidence **unbounded** (vote evidence capped at 3) | Studio | high | `ab36a137` | open, undecided |
+| F-02 | Cross-validator proposal `assert_eq!` aborts in **release** (not network-reachable) | Studio | medium | `ab36a137` | open, undecided |
+| F-18 | `ValidatorSet::new`'s overflow check bypassable — public field | Studio | medium | `e237290b` | open, undecided |
+| F-08 | The two `Height` impls disagree with each other and the docs | Studio | medium | `ab36a137` | open |
+| F-14 | Four `#[ignore]`d WAL tests assert a contract the code lacks (no-amnesia) | pre-existing | medium | `b9c3f555` | open, pre-existing |
+| F-04 | Arrival order decides which conflicting value is tallied | Studio | medium | `ab36a137` | open, undecided |
+| F-05 | Evidence surfaces before finalize | Studio | low | `ab36a137` | open, undecided |
+| F-06 | Four `signing` properties violated (one intentional) | Studio | unknown | `ab36a137` | open — `signing` still mid-refine |
+| F-10 | Doc-vs-code divergences in `core-types` | Studio | low | `ab36a137` | open |
+| F-15 | `ProposalKeeper` gained an always-present `oracle_addresses` field | instrumentation | low | `c3e28655` | open, needs a call |
+| F-03 | Three `equivocation-detection` properties may hold **vacuously** | Studio | — | `ab36a137` | open — weak evidence, not a proof |
+
+### Open — from the reviewer, on the 5f+1 code
+
+| Item | Description | Severity |
+| --- | --- | --- |
+| F-22 open 1 | Every `State` field is `pub`, so F-25's guards are advisory | medium |
+| F-22 open 2 | `WaitForValid` and the L39 timeout emit an identical `Timeout`; caller cannot tell which input to feed back | medium |
+| F-22 open 3 | `ProposeValue` accepted while `valid` is `Some` — would send a fresh proposal where L14-L15 needs a re-proposal | question |
+| F-22 open 4 | Nothing checks the validator set can support `f < n/5` | low |
+
+### Process findings, not code defects
+
+F-12 (a spec at 196/214 destroyed by my reset), F-13 (oracle runs look hung but are not),
+F-16 (concurrent pipelines broke the build), F-17 (re-sync proved the classic machine
+intact), F-19 (Studio's review queue swallowed a scope instruction), F-21 (Studio adopted
+mutation testing unprompted), F-23 (accepting a finding offers test generation).
+
+---
+
 ## Code anchors on `zm_5f+1`
 
 | Commit | When | What it is |
@@ -328,7 +382,7 @@ Studio finding; that needs the owner. Statuses below are mine, not Studio's.
 
 ## F-22 — Independent reviewer: four definite bugs the model and the tests both missed
 
-- **Anchor found at:** `99c8468c`; **fixed in:** `0a5c9e2` (see git log for the exact hash)
+- **Found against:** `99c8468c` · **Fixed in:** `7dbe76b6` · **Source:** independent reviewer subagent
 - **Found by:** an independent adversarial reviewer subagent, given the verbatim Algorithm 1
   transcription as ground truth and barred from reading the implementation's own tests as
   authority. None of these duplicate F-01..F-21.
@@ -404,6 +458,53 @@ test for it. Both verdicts recorded so far returned "decision recorded, but test
 could not start: another workflow already owns component 'fast-round-state-machine'" —
 a re-sync was in flight. Sequence finding decisions and pipeline work so the generated
 tests actually land.
+
+## F-24 — A decided value could be overwritten after a round change — AGREEMENT VIOLATION
+
+- **Found against:** `85d486e2` · **Fixed in:** `e600629e` and `99c8468c` · **Source:** Studio
+  (property `decision_is_final_and_commit_is_terminal`, with a generated reproducing test)
+- **Severity:** the most serious class of bug this protocol can have. Two different values
+  decided at one height.
+- **Component:** `fast-round-state-machine`
+- **Reproduced by:** Studio's generated test
+  `a_decision_is_never_replaced_after_a_new_round`, which failed with
+  "a second decision must not be accepted" (exit 101):
+
+```
+decide value 7 in round 4   -> step = Commit, decision = Some(7)
+apply NewRound(5)           -> step = Propose, decision SURVIVES
+second decision quorum      -> guard was `step != Commit`, so it PASSED
+                            -> the finalized value was overwritten with 5
+```
+
+- **Root cause:** the decide arm guarded on the STEP rather than on the decision, and
+  `NewRound` resets the step while carrying the decision forward.
+- **Fix, two layers:** `e600629e` changed the guard to `state.decision.is_none()` — a
+  decision is a latch, not a step, and the paper treats `decision_p` as write-once (L56
+  reads it as one). `99c8468c` then made the invariant structural, so a caller cannot
+  bypass it either (see F-25).
+- **Missed by:** my 22 hand-written tests. `commit_is_terminal` only applied an input while
+  the step was already `Commit`; it never tried `NewRound` first.
+- **Verdict recorded:** `accepted` via `set_finding`.
+
+## F-25 — `State`'s safety invariants were enforced only by `apply`, not by the type
+
+- **Found against:** `85d486e2` · **Fixed in:** `99c8468c` · **Source:** reading Studio's
+  model (`commitMutator` path), after four property violations survived the F-24 fix
+- **Component:** `fast-round-state-machine`
+- **How it surfaced:** replay of all 21 test traces was clean, yet four properties still
+  failed in simulation. The model has two commit paths — `commitResult` for `apply`, and
+  `commitMutator` for the raw public mutators, which it includes as actions precisely
+  because they are `pub`. The model described `set_decision` as an "unguarded overwrite",
+  which was accurate.
+- **Behavior:** a caller holding a `State` could overwrite a finalized decision or step
+  back out of `Commit` without going through `apply` at all.
+- **Fix:** `set_decision` is write-once; `with_step` refuses to leave `Commit`.
+- **Same class as:** F-18 (`ValidatorSet::new`'s overflow check bypassable because the
+  field is public). A rule enforced only by a constructor or transition function, while the
+  public API can bypass it, enforces nothing.
+- **Incompletely fixed — see F-22 open items:** every `State` field is still `pub`, so
+  these guards remain advisory. Closing that needs a test refactor.
 
 ---
 
