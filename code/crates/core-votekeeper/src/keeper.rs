@@ -265,6 +265,20 @@ where
 
     /// Return the evidence of equivocation.
     pub fn evidence(&self) -> &EvidenceMap<Ctx> {
+        if quint_oracle::enabled() && !self.evidence.is_empty() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "read_vote_evidence")
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("votePairs")]),
+                    self.evidence.pair_count() as i64,
+                )
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("voteAddrs")]),
+                    self.evidence.len() as i64,
+                )
+                .scope("equivocation-detection")
+                .send();
+        }
+
         &self.evidence
     }
 
@@ -387,6 +401,23 @@ where
                     )
                     .scope("vote-keeper")
                     .send();
+
+                quint_oracle::Event::builder(quint_oracle::current_test(), "apply_vote")
+                    .argument("vote_type", oracle_vote_type, Some("VOTE_TYPES"))
+                    .argument("src", oracle_src, Some("SENDERS"))
+                    .argument("vote_round", oracle_round, Some("VOTE_ROUNDS"))
+                    .argument("value", oracle_value.as_str(), Some("VOTE_VALUES"))
+                    .argument("current_round", oracle_current_round, Some("CURRENT_ROUNDS"))
+                    .assert(
+                        Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("votePairs")]),
+                        self.evidence.pair_count() as i64,
+                    )
+                    .assert(
+                        Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("voteAddrs")]),
+                        self.evidence.len() as i64,
+                    )
+                    .scope("equivocation-detection")
+                    .send();
             }
 
             return None;
@@ -434,6 +465,23 @@ where
                             self.evidence.len() as i64,
                         )
                         .scope("vote-keeper")
+                        .send();
+
+                    quint_oracle::Event::builder(quint_oracle::current_test(), "apply_vote")
+                        .argument("vote_type", oracle_vote_type, Some("VOTE_TYPES"))
+                        .argument("src", oracle_src, Some("SENDERS"))
+                        .argument("vote_round", oracle_round, Some("VOTE_ROUNDS"))
+                        .argument("value", oracle_value.as_str(), Some("VOTE_VALUES"))
+                        .argument("current_round", oracle_current_round, Some("CURRENT_ROUNDS"))
+                        .assert(
+                            Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("votePairs")]),
+                            self.evidence.pair_count() as i64,
+                        )
+                        .assert(
+                            Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("voteAddrs")]),
+                            self.evidence.len() as i64,
+                        )
+                        .scope("equivocation-detection")
                         .send();
                 }
 
@@ -526,6 +574,23 @@ where
                     self.evidence.len() as i64,
                 )
                 .scope("vote-keeper")
+                .send();
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "apply_vote")
+                .argument("vote_type", oracle_vote_type, Some("VOTE_TYPES"))
+                .argument("src", oracle_src, Some("SENDERS"))
+                .argument("vote_round", oracle_round, Some("VOTE_ROUNDS"))
+                .argument("value", oracle_value.as_str(), Some("VOTE_VALUES"))
+                .argument("current_round", oracle_current_round, Some("CURRENT_ROUNDS"))
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("votePairs")]),
+                    self.evidence.pair_count() as i64,
+                )
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("voteAddrs")]),
+                    self.evidence.len() as i64,
+                )
+                .scope("equivocation-detection")
                 .send();
         }
 

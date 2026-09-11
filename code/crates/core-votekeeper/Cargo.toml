@@ -22,5 +22,6 @@ derive-where = { workspace = true }
 thiserror = { workspace = true, default-features = false }
 
 [dev-dependencies]
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 bytes = { workspace = true }
 malachitebft-test = { workspace = true }

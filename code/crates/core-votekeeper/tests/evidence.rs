@@ -163,6 +163,8 @@ fn test_vote_evidence_deduplication() {
     ];
 
     for case in cases {
+        // Oracle test boundary: a fresh EvidenceMap per case means a fresh run.
+        let _oracle_case = quint_oracle::register_test("test_vote_evidence_deduplication");
         let mut evidence = EvidenceMap::<TestContext>::new();
 
         for &(addr_id, vote_type, round, values) in case.evidence {
