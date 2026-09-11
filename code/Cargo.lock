@@ -251,6 +251,7 @@ dependencies = [
  "bytesize",
  "humantime-serde",
  "multiaddr",
+ "quint-oracle",
  "serde",
  "serde_json",
  "thiserror 2.0.16",
@@ -304,6 +305,7 @@ name = "arc-malachitebft-core-state-machine"
 version = "0.8.0"
 dependencies = [
  "arc-malachitebft-core-types",
+ "arc-malachitebft-test",
  "derive-where",
  "displaydoc",
  "quint-oracle",
@@ -319,6 +321,7 @@ dependencies = [
  "borsh",
  "bytes",
  "derive-where",
+ "quint-oracle",
  "rand 0.8.5",
  "serde",
  "thiserror 2.0.16",
@@ -430,6 +433,7 @@ version = "0.8.0"
 dependencies = [
  "arc-malachitebft-core-state-machine",
  "prometheus-client",
+ "quint-oracle",
 ]
 
 [[package]]
@@ -488,6 +492,7 @@ version = "0.8.0"
 dependencies = [
  "arc-malachitebft-core-types",
  "async-trait",
+ "quint-oracle",
  "signature",
 ]
 
@@ -496,10 +501,12 @@ name = "arc-malachitebft-signing-ecdsa"
 version = "0.8.0"
 dependencies = [
  "arc-malachitebft-core-types",
+ "arc-malachitebft-signing",
  "base64 0.22.1",
  "k256",
  "p256",
  "p384",
+ "quint-oracle",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -511,8 +518,10 @@ name = "arc-malachitebft-signing-ed25519"
 version = "0.8.0"
 dependencies = [
  "arc-malachitebft-core-types",
+ "arc-malachitebft-signing",
  "base64 0.22.1",
  "ed25519-consensus",
+ "quint-oracle",
  "rand 0.8.5",
  "serde",
  "signature",

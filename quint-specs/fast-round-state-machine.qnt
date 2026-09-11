@@ -68,7 +68,7 @@ module fast_round_state_machine {
     | InvalidProposal
     | ProposalAndVoteQuorumPrevious(Prop)
     | InvalidProposalAndVoteQuorumPrevious(Prop)
-    | VoteQuorumForValue(Value)
+    | VoteQuorumForValue({ round: Round, value_id: Value })
     | QuorumAny(Round)
     | ProposalAndDecisionQuorum(Prop)
     | TimeoutPropose
@@ -98,6 +98,13 @@ module fast_round_state_machine {
     decision: MaybeDec,
     awaiting_valid: bool,
     scheduled: Set[TimeoutKind],
+    /// state.rs `armed_precommit_rounds`: the rounds whose L39 precommit timeout
+    /// has been armed. Kept per round rather than in `scheduled`, because L39
+    /// arms the timeout for the QUORUM's round, which may be above ours — the
+    /// per-round bit would let a quorum for round 0 consume the only slot and
+    /// leave round 1's timeout unarmed forever. It is per height, so a round
+    /// change does not clear it.
+    armedPrecommit: Set[Round],
   }
 
   /// The result of one `apply`: FastTransition plus the L-line tag.
@@ -140,7 +147,7 @@ module fast_round_state_machine {
     else if (tag == "InvalidProposal") InvalidProposal
     else if (tag == "ProposalAndVoteQuorumPrevious") ProposalAndVoteQuorumPrevious(p)
     else if (tag == "InvalidProposalAndVoteQuorumPrevious") InvalidProposalAndVoteQuorumPrevious(p)
-    else if (tag == "VoteQuorumForValue") VoteQuorumForValue(v)
+    else if (tag == "VoteQuorumForValue") VoteQuorumForValue({ round: p.round, value_id: v })
     else if (tag == "QuorumAny") QuorumAny(r)
     else if (tag == "ProposalAndDecisionQuorum") ProposalAndDecisionQuorum(p)
     else if (tag == "TimeoutPropose") TimeoutPropose
@@ -164,7 +171,7 @@ module fast_round_state_machine {
   /// carries the round of the proposal it came from.
   pure def mkPre(sround: Round, sstep: str, svround: Round, svalue: Value,
                  sdround: Round, sdvalue: Value, sawaiting: bool,
-                 sscheduled: int): SMState = {
+                 sscheduled: int, sarmed: int): SMState = {
     round: sround,
     step:
       if (sstep == "Unstarted") Unstarted
@@ -177,7 +184,19 @@ module fast_round_state_machine {
     scheduled:
       (if (sscheduled == 1 or sscheduled == 3) Set(TPropose) else Set())
         .union(if (sscheduled >= 2) Set(TPrecommit) else Set()),
+    armedPrecommit: ROUND_BAND.filter(r => armedBitSet(sarmed, r)),
   }
+
+  /// `armed_precommit_rounds` travels as a bitmask over ROUND_BAND: bit 0 is
+  /// round -1, bit i+1 is round i. Only rounds in the band are represented; a
+  /// round armed outside it would fail replay loudly rather than pass wrongly.
+  pure def armedBit(r: Round): int = 2^(r + 1)
+
+  pure def armedBitSet(mask: int, r: Round): bool =
+    mask / armedBit(r) % 2 == 1
+
+  pure def armedMaskOf(s: SMState): int =
+    ROUND_BAND.fold(0, (acc, r) => if (s.armedPrecommit.contains(r)) acc + armedBit(r) else acc)
 
   /// The reverse: the bitset of a state, for the continuity arm of `step`.
   pure def bitsOf(s: SMState): int =
@@ -232,20 +251,41 @@ module fast_round_state_machine {
 
   /// state.rs State::update_round(round): moves round, clears the per-round
   /// bookkeeping. `valid` and `decision` are per-height and survive.
+  ///
+  /// The bits are cleared only when the round actually CHANGES. Clearing
+  /// unconditionally re-armed a round we are already in — `apply` accepts
+  /// `NewRound(r)` whenever `state.round <= r` — which defeated the
+  /// at-most-once guard in `check_timeout` and made the L18 suppression branch
+  /// dead code.
   pure def updateRound(s: SMState, r: Round): SMState =
-    { ...s, round: r, scheduled: Set() }
+    if (s.round != r) { ...s, round: r, scheduled: Set() } else s
 
-  /// state.rs State::with_step(step)
-  pure def withStep(s: SMState, st: Step): SMState = { ...s, step: st }
+  /// state.rs State::arm_precommit_timeout(round) — true the first time it is
+  /// called for a round.
+  pure def armPrecommit(s: SMState, r: Round): bool = not(s.armedPrecommit.contains(r))
+
+  pure def recordArmed(s: SMState, r: Round): SMState =
+    { ...s, armedPrecommit: s.armedPrecommit.union(Set(r)) }
+
+  /// state.rs State::with_step(step).
+  ///
+  /// Refuses to leave `Commit`: a decided round is terminal, and letting a
+  /// caller step back out of it is what allowed a finalized decision to be
+  /// overwritten. The guard lives on the builder so it holds for every caller.
+  pure def withStep(s: SMState, st: Step): SMState =
+    if (s.step == Commit) s else { ...s, step: st }
 
   /// state.rs State::set_valid(round, value_id) — monotone: a no-op unless the
   /// new round is strictly above the recorded one.
   pure def setValid(s: SMState, r: Round, v: Value): SMState =
     if (validRound(s) < r) { ...s, valid: SomeRV({ round: r, value_id: v }) } else s
 
-  /// state.rs State::set_decision(proposal_round, value) — unguarded overwrite.
+  /// state.rs State::set_decision(proposal_round, value).
+  ///
+  /// Write-once. A second call is a no-op: a height decides at most one value
+  /// and the paper treats `decision_p` as a latch (L56 reads it as one).
   pure def setDecision(s: SMState, r: Round, v: Value): SMState =
-    { ...s, decision: SomeDec({ round: r, value: v }) }
+    if (s.decision != NoDec) s else { ...s, decision: SomeDec({ round: r, value: v }) }
 
   /// output.rs Output::vote(..) — ALWAYS a precommit; the protocol has one
   /// voting step. The kind is carried explicitly so that stays checkable.
@@ -306,8 +346,14 @@ module fast_round_state_machine {
     val thisRound = s.round == i.input_round
     match input {
       // L6-L18: start a round.
+      //
+      // The step guard matters: Algorithm 1 only ever calls StartRound(round+1),
+      // so re-entering the round we are already in never happens. Without it, a
+      // NewRound for the current round resets Precommit back to Propose and the
+      // node can cast a SECOND vote in that round — equivocating against itself.
       | NewRound(r) =>
-          if (s.round <= r) startRound(s, i, r)
+          if (s.step == Unstarted and s.round <= r) startRound(s, i, r)
+          else if (s.round < r) startRound(s, i, r)
           else { st: s, out: ONone, ok: false, line: "NoArm" }
 
       // L13/L16: the application produced a value and we are the proposer.
@@ -339,8 +385,15 @@ module fast_round_state_machine {
             if (not(isDefined(p.polRound)) or p.polRound >= s.round)
               { st: s, out: ONone, ok: false, line: "L27MalformedValidRound" }
             else if (validRound(s) <= p.polRound or validIs(s, p.value)) {
-              // L29-L30.
-              val s2 = setValid(s, p.polRound, p.value)
+              // L29-L30. Note `<=`: at equality the paper REPLACES the value it
+              // holds. With n > 5f two 2f+1 quorums need not intersect
+              // (2(2f+1) - (5f+1) = 1-f <= 0), so two different values can each
+              // hold a quorum in the same round vr. `set_valid` is monotone and
+              // no-ops at equality, so the code writes `valid` directly here.
+              val s2 =
+                if (validRound(s) <= p.polRound)
+                  { ...s, valid: SomeRV({ round: p.polRound, value_id: p.value }) }
+                else s
               vote(s2, VVal(p.value),
                    if (validRound(s) <= p.polRound) "L30ReproposalAcceptedRaised"
                    else "L30ReproposalAcceptedSameId")
@@ -352,23 +405,31 @@ module fast_round_state_machine {
           if (s.step == Propose and thisRound) vote(s, VNil, "L33VoteNilInvalidReproposal")
           else { st: s, out: ONone, ok: false, line: "NoArm" }
 
-      // L36-L37: the observation rule.
-      | VoteQuorumForValue(v) =>
-          if (thisRound) {
-            val raised = validRound(s) < s.round
-            val s2 = setValid(s, s.round, v)
-            if (not(raised)) { st: s2, out: ONone, ok: false, line: "L36NotRaised" }
-            else if (s2.awaiting_valid and isProposer(i)) {
-              val r = proposeNow(s2)
-              { ...r, line: "L48WaitResolvedRepropose" }
-            } else { st: s2, out: ONone, ok: true, line: "L37SetValid" }
-          } else { st: s, out: ONone, ok: false, line: "NoArm" }
+      // L36-L37 and L47-L48: the observation rule. 2f+1 votes for a value in ANY
+      // round above the one we hold valid raise `valid`. The round is carried on
+      // the input rather than assumed to be ours: a proposer inside WaitForValid
+      // sits at round_p while the quorum that ends its wait is for round_p - 1
+      // (L46), so gating on the current round would make L47 unreachable and
+      // force every wait to burn its full timeout.
+      | VoteQuorumForValue(q) => {
+          val raised = validRound(s) < q.round
+          val s2 = setValid(s, q.round, q.value_id)
+          if (not(raised)) { st: s2, out: ONone, ok: false, line: "L36NotRaised" }
+          else if (s2.awaiting_valid and isProposer(i)) {
+            val r = proposeNow(s2)
+            { ...r, line: "L48WaitResolvedRepropose" }
+          } else { st: s2, out: ONone, ok: true, line: "L37SetValid" }
+        }
 
       // L39-L40: n - f votes for any value at a round at or above ours.
+      // L39 latches per r ("for the first time with r >= round_p"), and the
+      // timeout scheduled is for r, which may be ABOVE the round we are at.
+      // Using the per-round bit would let a quorum for round 0 consume the only
+      // slot and leave round 1's timeout unarmed forever.
       | QuorumAny(r) =>
           if (r >= s.round)
-            if (checkTimeout(s, TPrecommit))
-              { st: recordTimeout(s, TPrecommit),
+            if (armPrecommit(s, r))
+              { st: recordArmed(s, r),
                 out: scheduleTimeout(r, TPrecommit),
                 ok: true, line: "L40PrecommitTimeoutScheduled" }
             else { st: s, out: ONone, ok: false, line: "L40PrecommitTimeoutSuppressed" }
@@ -376,8 +437,13 @@ module fast_round_state_machine {
 
       // L42-L43: decide. Only a FRESH proposal establishes validity; its round
       // may differ from ours and from the votes'.
+      //
+      // The guard is on `decision`, NOT on the step: `NewRound` resets the step
+      // to Propose while carrying the decision forward, so a step-only guard let
+      // a second quorum overwrite a finalized value — two different values
+      // decided at one height.
       | ProposalAndDecisionQuorum(p) =>
-          if (s.step != Commit)
+          if (s.decision == NoDec)
             if (not(isNil(p.polRound)))
               { st: s, out: ONone, ok: false, line: "L42ReproposalCannotDecide" }
             else
@@ -449,7 +515,44 @@ module fast_round_state_machine {
       | _ => false
     }
 
-  /// The (round, kind) a timeout-bearing output claims, if any.
+  /// L18/L40: a per-round timeout is armed at most once per round.
+  ///
+  /// Stated PER TRANSITION, against the pre-state `apply` was handed: a
+  /// `ScheduleTimeout` may only be emitted when that kind was not already
+  /// recorded for the round the state stays in. A run-wide set of emitted
+  /// (round, kind) pairs would be unsound here — each step may begin from an
+  /// unrelated caller-built state, so two legitimate first-arms of round 0 in
+  /// different states would collide.
+  ///
+  /// Only `OScheduleTimeout` is covered: the code emits it solely from the two
+  /// `check_timeout`-guarded sites (L18 and L40). `GetValueAndScheduleTimeout`
+  /// and `WaitForValid` are emitted unconditionally and are not guarded by the
+  /// bitset at all.
+  /// The timeout kinds THIS transition armed — exactly the one its
+  /// `ScheduleTimeout` output names, since that output is emitted only when
+  /// `check_timeout` granted the bit.
+  pure def armedBy(o: Output): Set[TimeoutKind] =
+    match o { | OScheduleTimeout(t) => Set(t.kind) | _ => Set() }
+
+  /// L6/L18: entering a new round clears the previous round's timeout
+  /// bookkeeping, so after a round change the scheduled set holds nothing
+  /// beyond what this very transition armed.
+  ///
+  /// Comparing against `pre.scheduled` would be wrong: a round change clears
+  /// the bits and the new round may immediately arm the SAME kind, which is
+  /// indistinguishable from a bit that survived. Comparing against what the
+  /// transition armed is not.
+  pure def staleBitsSurvived(pre: SMState, r: Result): bool =
+    r.st.round != pre.round and not(r.st.scheduled.subseteq(armedBy(r.out)))
+
+  pure def timeoutRearmed(pre: SMState, r: Result): bool =
+    match r.out {
+      | OScheduleTimeout(t) => r.st.round == pre.round and pre.scheduled.contains(t.kind)
+      | _ => false
+    }
+
+  /// The (round, kind) a timeout-bearing output claims, if any. Kept for trace
+  /// readability; the at-most-once claim is `timeoutRearmed` above.
   pure def timeoutKeyOf(o: Output): Set[(Round, TimeoutKind)] =
     match o {
       | OScheduleTimeout(t) => Set((t.round, t.kind))
@@ -469,6 +572,7 @@ module fast_round_state_machine {
     decision: NoDec,
     awaiting_valid: false,
     scheduled: Set(),
+    armedPrecommit: Set(),
   }
 
   var state: SMState
@@ -585,11 +689,15 @@ module fast_round_state_machine {
     (r.st.round != pre.round or isRoundAdvancingOutput(r.out))
       and not(mayAdvanceRound(input))
 
-  /// L15-L16: a Repropose names exactly the pair we hold valid.
-  pure def reproposeBroken(pre: SMState, r: Result): bool =
+  /// L15-L16: a Repropose names exactly the pair the machine holds valid.
+  ///
+  /// Judged against the POST-state: L36-L37 raises `valid_p` and, when the
+  /// proposer is still waiting, L48 re-proposes the just-raised pair in the same
+  /// transition. Comparing against the pre-state would flag that legal path.
+  pure def reproposeBroken(r: Result): bool =
     match r.out {
       | ORepropose(rp) =>
-          match pre.valid {
+          match r.st.valid {
             | NoRV => true
             | SomeRV(rv) => rp.value_id != rv.value_id or rp.valid_round != rv.round
           }
@@ -600,7 +708,7 @@ module fast_round_state_machine {
   /// Commit step records no further one.
   pure def decisionFinalityBrokenBy(pre: SMState, r: Result): bool =
     (pre.decision != NoDec and r.st.decision != pre.decision)
-      or (pre.step == Commit and r.st.decision != pre.decision)
+      or (pre.step == Commit and r.st.step != Commit)
 
   pure def votedNonPrecommit(o: Output): bool =
     match o { | OVote(v) => v.kind != KPrecommit | _ => false }
@@ -623,17 +731,16 @@ module fast_round_state_machine {
     maxValidRound' = if (validRound(r.st) > maxValidRound) validRound(r.st) else maxValidRound,
     firstDecision' = match firstDecision { | NoDec => r.st.decision | SomeDec(d) => SomeDec(d) },
     emittedTimeouts' = emittedTimeouts.union(timeoutKeyOf(r.out)),
-    duplicateTimeout' =
-      (duplicateTimeout or timeoutKeyOf(r.out).exists(k => emittedTimeouts.contains(k))),
+    duplicateTimeout' = (duplicateTimeout or timeoutRearmed(pre, r)),
     staleTimeoutBits' =
-      (staleTimeoutBits or (r.st.round != pre.round and r.st.scheduled != Set())),
+      (staleTimeoutBits or staleBitsSurvived(pre, r)),
     bindingRuleBroken' = (bindingRuleBroken or bindingBroken(pre, i, input, r)),
     reproposalRuleBroken' = (reproposalRuleBroken or reproposalBroken(pre, i, input, r)),
     decisionRuleBroken' = (decisionRuleBroken or decisionBroken(pre, input, r)),
     illegalRoundAdvance' = (illegalRoundAdvance or roundAdvanceBroken(pre, input, r)),
     nonPrecommitVote' = (nonPrecommitVote or votedNonPrecommit(r.out)),
     validDecreased' = (validDecreased or (validRound(r.st) < validRound(pre))),
-    reproposedWithoutValid' = (reproposedWithoutValid or reproposeBroken(pre, r)),
+    reproposedWithoutValid' = (reproposedWithoutValid or reproposeBroken(r)),
     decisionFinalityBroken' = (decisionFinalityBroken or decisionFinalityBrokenBy(pre, r)),
   }
 
@@ -791,8 +898,7 @@ module fast_round_state_machine {
   //--------------------------------------------------------------------------
 
   /// The round recorded in valid never falls below a round it already reached.
-  val valid_p_never_decreases: bool =
-    not(validDecreased) and validRound(state) == maxValidRound
+  val valid_p_never_decreases: bool = not(validDecreased)
 
   /// A fresh proposal draws a vote for its value exactly when nothing binds us
   /// or it re-offers the identifier we hold valid, and a nil vote otherwise.
@@ -812,8 +918,8 @@ module fast_round_state_machine {
   val round_advances_only_by_quorum_any_or_timeout_precommit: bool =
     not(illegalRoundAdvance)
 
-  /// A decision is never changed once recorded, and the Commit step records no
-  /// further decision.
+  /// A decision is never changed once recorded, and the Commit step is never
+  /// left.
   val decision_is_final_and_commit_is_terminal: bool = not(decisionFinalityBroken)
 
   /// Every vote the state machine emits is a precommit.
@@ -823,6 +929,7 @@ module fast_round_state_machine {
   /// survives a round change.
   val round_timeout_armed_at_most_once_per_round: bool =
     not(duplicateTimeout) and not(staleTimeoutBits)
+
 
   /// A re-proposal names exactly the identifier and round the state holds valid.
   val repropose_only_carries_a_value_we_hold: bool = not(reproposedWithoutValid)
@@ -843,11 +950,12 @@ module fast_round_state_machine {
     lastLine == "L18ProposeTimeoutScheduled"
   /// L18: the propose timeout was already armed, so nothing was scheduled.
   ///
-  /// UNREACHABLE BY CONSTRUCTION, in the model and in the code: `start_round`
-  /// calls `update_round`, which CLEARS the scheduled bits, before
-  /// `check_timeout(Propose)` — so `check_timeout` there always returns true and
-  /// this branch of state_machine.rs is dead. Simulation confirms it: 0 of 1000
-  /// samples. Kept because the code has the branch; no test can ever cover it.
+  /// This became LIVE with the fix recorded as F-20: `update_round` used to
+  /// clear the timeout bits unconditionally, immediately before
+  /// `check_timeout(Propose)`, so the check always succeeded and the branch was
+  /// dead. The bits are now cleared only on a real round change, so re-entering
+  /// the round we are already in — which `apply` accepts, since its NewRound
+  /// guard is `state.round <= round` — reaches this arm.
   val non_proposer_propose_timeout_suppressed: bool =
     lastLine == "L18ProposeTimeoutSuppressed"
 
@@ -905,7 +1013,7 @@ module fast_round_state_machine {
   }
   /// L42: a re-proposal carries only an identifier and cannot be decided on.
   val decision_refused_for_a_reproposal: bool = lastLine == "L42ReproposalCannotDecide"
-  /// Commit is terminal: a second decision quorum did not apply.
+  /// A decision is already recorded, so a second decision quorum did not apply.
   val decision_refused_in_commit_step: bool = lastLine == "CommitTerminal"
 
   /// L55-L57: the precommit timeout gave up on the round.

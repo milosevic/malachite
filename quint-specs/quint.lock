@@ -4763,11 +4763,11 @@ coverage = "fnv1a64:598014591b3ee640"
 "code/crates/core-state-machine/src/fast/input.rs" = "fnv1a64:d1ace77c3e334f60"
 "code/crates/core-state-machine/src/fast/mod.rs" = "fnv1a64:83957778a22783b3"
 "code/crates/core-state-machine/src/fast/output.rs" = "fnv1a64:816d0709bb2f9c95"
-"code/crates/core-state-machine/src/fast/state.rs" = "fnv1a64:49935673425172f5"
-"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:f59ffb41e9971077"
+"code/crates/core-state-machine/src/fast/state.rs" = "fnv1a64:f59274be5e1cb99c"
+"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:15f29b7a52cd44c6"
 
 [components.fast-round-state-machine.fingerprints.instrumented]
-"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:f59ffb41e9971077"
+"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:15f29b7a52cd44c6"
 "quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
 "quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
 "quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
@@ -4779,6 +4779,20 @@ coverage = "fnv1a64:598014591b3ee640"
 "quint-specs/oracle-client/rust/src/live/value.rs" = "fnv1a64:7c5a5dd102552994"
 "quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
 "quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
+
+[[components.fast-round-state-machine.findingVerdicts]]
+subject = "property:decision_is_final_and_commit_is_terminal"
+decision = "accepted"
+by = "user"
+seed = "1789124931481866649"
+at = 1789125288
+
+[[components.fast-round-state-machine.findingVerdicts]]
+subject = "property:round_timeout_armed_at_most_once_per_round"
+decision = "accepted"
+by = "user"
+seed = "1789124931481865075"
+at = 1789125304
 
 [components.fast-vote-keeper]
 name = "Fast Tendermint Vote Keeper"
