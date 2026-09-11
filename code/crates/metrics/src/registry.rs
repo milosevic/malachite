@@ -11,6 +11,19 @@ pub struct SharedRegistry {
 
 impl SharedRegistry {
     pub fn new(registry: Registry, moniker: Option<String>) -> Self {
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "SharedRegistrynew__export")
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("registry_created"),
+                    ],
+                    true,
+                )
+                .scope("node-config")
+                .send();
+        }
+
         Self {
             moniker,
             registry: Arc::new(RwLock::new(registry)),
@@ -22,8 +35,20 @@ impl SharedRegistry {
     }
 
     pub fn with_moniker(&self, moniker: impl Into<String>) -> Self {
+        let moniker = moniker.into();
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "SharedRegistrywith_moniker",
+            )
+            .argument("moniker", moniker.as_str(), Some("MONIKERS"))
+            .scope("node-config")
+            .send();
+        }
+
         Self {
-            moniker: Some(moniker.into()),
+            moniker: Some(moniker),
             registry: Arc::clone(&self.registry),
         }
     }
@@ -60,5 +85,18 @@ fn global_registry() -> &'static SharedRegistry {
 pub fn export<W: core::fmt::Write>(writer: &mut W) {
     use prometheus_client::encoding::text::encode;
 
-    SharedRegistry::global().read(|registry| encode(writer, registry).unwrap())
+    SharedRegistry::global().read(|registry| encode(writer, registry).unwrap());
+
+    if quint_oracle::enabled() {
+        quint_oracle::Event::builder(quint_oracle::current_test(), "Registryexport")
+            .assert(
+                vec![
+                    quint_oracle::PathSeg::ident("state"),
+                    quint_oracle::PathSeg::ident("registry_exported"),
+                ],
+                true,
+            )
+            .scope("node-config")
+            .send();
+    }
 }

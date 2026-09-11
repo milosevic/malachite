@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::{cmp, fmt};
 
 /// A round number.
@@ -65,10 +66,34 @@ impl Round {
     /// If the round is nil, then the initial zero round is returned.
     /// Otherwise, the round is incremented by one.
     pub fn increment(&self) -> Round {
-        match self {
+        let incremented = match self {
             Round::Nil => Round::new(0),
             Round::Some(r) => Round::new(r + 1),
+        };
+
+        if quint_oracle::enabled() {
+            let event =
+                quint_oracle::Event::builder(quint_oracle::current_test(), "Roundincrement")
+                    .argument("round", self.as_i64(), Some("ROUNDS"));
+
+            // The spec latches that a nil round was incremented; the flag is
+            // monotone, so it is only pinned on the call that sets it.
+            let event = if self.is_nil() {
+                event.assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("round_from_nil"),
+                    ]),
+                    true,
+                )
+            } else {
+                event
+            };
+
+            event.scope("core-types-domain").send();
         }
+
+        incremented
     }
 
     /// Return `self` if it is defined, otherwise return `round`.

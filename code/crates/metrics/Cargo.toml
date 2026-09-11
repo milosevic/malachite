@@ -13,6 +13,7 @@ readme = "../../../README.md"
 all-features = true
 
 [dependencies]
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 malachitebft-core-state-machine.workspace = true
 prometheus-client.workspace = true
 

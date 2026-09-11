@@ -2,6 +2,8 @@
 
 use derive_where::derive_where;
 
+use alloc::collections::BTreeSet;
+
 use malachitebft_core_types::{Context, Round, TimeoutKind, ValueId};
 
 /// A value identifier and the round it became valid in.
@@ -131,6 +133,12 @@ where
     /// Timeouts already scheduled in the current round.
     #[derive_where(skip(EqHashOrd))]
     pub scheduled_timeouts: ScheduledTimeouts,
+
+    /// Rounds whose precommit timeout has already been armed by the L39 quorum-any rule.
+    ///
+    /// Kept per round rather than in `scheduled_timeouts`, because L39 arms the timeout
+    /// for the QUORUM's round, which may be above the round we are at.
+    pub armed_precommit_rounds: BTreeSet<Round>,
 }
 
 impl<Ctx> State<Ctx>
@@ -147,7 +155,15 @@ where
             decision: None,
             awaiting_valid: false,
             scheduled_timeouts: ScheduledTimeouts::default(),
+            armed_precommit_rounds: BTreeSet::new(),
         }
+    }
+
+    /// Record that the L39 precommit timeout has been armed for `round`.
+    ///
+    /// Returns `true` the first time it is called for a given round.
+    pub fn arm_precommit_timeout(&mut self, round: Round) -> bool {
+        self.armed_precommit_rounds.insert(round)
     }
 
     /// The round recorded in `valid`, or `Round::Nil` when nothing is valid yet.

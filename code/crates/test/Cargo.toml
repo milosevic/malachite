@@ -19,7 +19,10 @@ malachitebft-config = { workspace = true }
 malachitebft-core-consensus = { workspace = true }
 malachitebft-proto = { workspace = true }
 malachitebft-peer = { workspace = true, features = ["rand", "serde"] }
-malachitebft-signing = { workspace = true }
+# `quint-oracle` gives this crate the shared `signing` identity projection
+# (`malachitebft_signing::quint_ids`). The log sites stay inert at runtime unless the
+# client's own `enabled` feature is on, which is what the oracle test command passes.
+malachitebft-signing = { workspace = true, features = ["quint-oracle"] }
 malachitebft-signing-ed25519 = { workspace = true, features = ["rand", "serde"] }
 malachitebft-sync = { workspace = true }
 
@@ -40,6 +43,10 @@ serde_json = { workspace = true }
 sha3 = { workspace = true }
 signature = { workspace = true }
 tokio = { workspace = true }
+
+# Quint Studio oracle instrumentation: a no-op unless built with
+# `--features quint-oracle/enabled`, so production builds carry none of it.
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 
 [dev-dependencies]
 malachitebft-metrics.workspace = true

@@ -20,6 +20,9 @@ rand = ["dep:rand"]
 k256 = ["dep:k256"]
 p256 = ["dep:p256"]
 p384 = ["dep:p384"]
+# Quint Studio oracle instrumentation for the SigningScheme decoders. Off by default,
+# so `no_std` and production builds compile none of it.
+quint-oracle = ["dep:quint-oracle", "malachitebft-signing/quint-oracle"]
 
 [dependencies]
 malachitebft-core-types = { workspace = true }
@@ -27,6 +30,9 @@ signature = { workspace = true }
 k256 = { workspace = true, optional = true, features = ["ecdsa"] }
 p256 = { workspace = true, optional = true, features = ["ecdsa"] }
 p384 = { workspace = true, optional = true, features = ["ecdsa"] }
+
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust", optional = true }
+malachitebft-signing = { workspace = true, optional = true }
 
 # Optional dependencies
 rand = { workspace = true, optional = true }

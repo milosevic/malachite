@@ -143,10 +143,10 @@ where
                 Some(proposal.pol_round().as_i64()),
                 None,
             ),
-            Input::VoteQuorumForValue(value_id) => (
+            Input::VoteQuorumForValue(quorum_round, value_id) => (
                 "VoteQuorumForValue",
                 Some(alloc::format!("{value_id}")),
-                None,
+                Some(quorum_round.as_i64()),
                 None,
                 None,
             ),
@@ -221,8 +221,14 @@ where
     Ctx: Context,
 {
     match (state.step, input) {
-        // L6-L18: start a round.
-        (_, Input::NewRound(round)) if state.round <= round => start_round(state, info, round),
+        // L6-L18: start a round. The step guard matters: Algorithm 1 only ever calls
+        // StartRound(round+1), so re-entering the round we are already in never happens.
+        // Without it, a NewRound for the current round resets Precommit back to Propose
+        // and the node can cast a SECOND vote in that round — equivocating against itself.
+        (Step::Unstarted, Input::NewRound(round)) if state.round <= round => {
+            start_round(state, info, round)
+        }
+        (_, Input::NewRound(round)) if state.round < round => start_round(state, info, round),
 
         // L13/L16: the application produced a value and we are the proposer, no longer
         // waiting. `valid` is nil here, so the proposal is fresh and carries validRound -1.
@@ -266,8 +272,14 @@ where
             // L28: accept when the justification is at least as recent as what binds us,
             // or when it re-offers the same identifier.
             if state.valid_round() <= vr || state.valid_is(&value_id) {
-                // L29-L30.
-                state = state.set_valid(vr, value_id.clone());
+                // L29-L30. Note `<=`: at equality the paper REPLACES the value it holds.
+                // With n > 5f two 2f+1 quorums need not intersect
+                // (2(2f+1) - (5f+1) = 1-f <= 0), so two different values can each hold a
+                // quorum in the same round vr. `set_valid` is monotone and no-ops at
+                // equality, so it cannot express this — write it directly.
+                if state.valid_round() <= vr {
+                    state.valid = Some(crate::fast::state::RoundValueId::new(vr, value_id.clone()));
+                }
                 vote(ctx, state, info, NilOrVal::Val(value_id))
             } else {
                 vote(ctx, state, info, NilOrVal::Nil)
@@ -279,12 +291,14 @@ where
             vote(ctx, state, info, NilOrVal::Nil)
         }
 
-        // L36-L37: the observation rule. 2f+1 votes for a value in this round make it
-        // valid. A proposer still waiting may now have what it needs to propose.
-        (_, Input::VoteQuorumForValue(value_id)) if this_round => {
-            let round = state.round;
-            let raised = state.valid_round() < round;
-            state = state.set_valid(round, value_id);
+        // L36-L37 and L47-L48: the observation rule. 2f+1 votes for a value in any round
+        // above the one we hold valid raise `valid`. The round is carried explicitly
+        // because a proposer inside WaitForValid is at round_p while the quorum that ends
+        // its wait is for round_p - 1 (L46) — gating on the current round would make L47
+        // unreachable and force every wait to burn its full timeout.
+        (_, Input::VoteQuorumForValue(quorum_round, value_id)) => {
+            let raised = state.valid_round() < quorum_round;
+            state = state.set_valid(quorum_round, value_id);
 
             if !raised {
                 return Transition::invalid(state);
@@ -299,7 +313,11 @@ where
         // L39-L40: n - f votes for any value at a round at or above ours arms the
         // precommit timeout. This is the only path that advances a round.
         (_, Input::QuorumAny(round)) if round >= state.round => {
-            if state.check_timeout(TimeoutKind::Precommit) {
+            // L39 latches per r ("for the first time with r >= round_p"), and the timeout
+            // scheduled is for r, which may be ABOVE the round we are at. Using the
+            // per-round bit would let a quorum for round 0 consume the only slot and leave
+            // round 1's timeout unarmed forever.
+            if state.arm_precommit_timeout(round) {
                 Transition::to(state)
                     .with_output(Output::schedule_timeout(round, TimeoutKind::Precommit))
             } else {

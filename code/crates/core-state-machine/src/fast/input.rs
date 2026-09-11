@@ -50,8 +50,14 @@ where
     /// (L33).
     InvalidProposalAndVoteQuorumPrevious(Ctx::Proposal),
 
-    /// `2f+1` votes for `id(v)` in the round we are at (L36) — the observation rule.
-    VoteQuorumForValue(ValueId<Ctx>),
+    /// `2f+1` votes for `id(v)` in the given round (L36, and L47 inside `WaitForValid`) —
+    /// the observation rule.
+    ///
+    /// The round is carried explicitly rather than assumed to be the current one: a
+    /// proposer inside `WaitForValid` sits at `round_p` while the quorum that ends its
+    /// wait is for `round_p - 1` (L46). Gating on the current round would make L47
+    /// unreachable and force every wait to burn its full timeout.
+    VoteQuorumForValue(Round, ValueId<Ctx>),
 
     /// `n - f` votes for *any* value at a round at or above ours, seen for the first time
     /// (L39).

@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::time::Duration;
 
@@ -91,16 +92,109 @@ impl Default for LinearTimeouts {
     }
 }
 
+/// Quint oracle: a duration in whole milliseconds, the unit the spec models
+/// timeouts in. Clamped into i64 so a `Duration::MAX` field cannot wrap the
+/// logged value.
+fn oracle_ms(duration: Duration) -> i64 {
+    let millis = duration.as_millis();
+    if millis > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        millis as i64
+    }
+}
+
 impl LinearTimeouts {
+    /// Quint oracle: the configuration this call runs against. `LinearTimeouts` is
+    /// built as a struct literal (here and in the applications' middleware), so
+    /// there is no constructor to instrument — `self` IS the installed
+    /// configuration, and the spec's `LinearTimeoutsset` records it as the state
+    /// the call sees.
+    fn log_config_install(&self) {
+        // Eight scalar arguments, named exactly as the spec action's parameters, so
+        // each one PINS its own nondet pick. A single record argument named `cfg`
+        // matched no parameter at all: replay left all eight unguided and picked
+        // max_timeout: 0, which is what the oracle's assertion mismatch caught.
+        quint_oracle::Event::builder(quint_oracle::current_test(), "LinearTimeoutsset")
+            .argument("propose", oracle_ms(self.propose), Some("TIMEOUT_MS"))
+            .argument(
+                "propose_delta",
+                oracle_ms(self.propose_delta),
+                Some("TIMEOUT_MS"),
+            )
+            .argument("prevote", oracle_ms(self.prevote), Some("TIMEOUT_MS"))
+            .argument(
+                "prevote_delta",
+                oracle_ms(self.prevote_delta),
+                Some("TIMEOUT_MS"),
+            )
+            .argument("precommit", oracle_ms(self.precommit), Some("TIMEOUT_MS"))
+            .argument(
+                "precommit_delta",
+                oracle_ms(self.precommit_delta),
+                Some("TIMEOUT_MS"),
+            )
+            .argument("rebroadcast", oracle_ms(self.rebroadcast), Some("TIMEOUT_MS"))
+            .argument("max_timeout", oracle_ms(self.max_timeout), Some("TIMEOUT_MS"))
+            .assert(
+                Vec::from([
+                    quint_oracle::PathSeg::ident("state"),
+                    quint_oracle::PathSeg::ident("timeouts"),
+                    quint_oracle::PathSeg::ident("max_timeout"),
+                ]),
+                oracle_ms(self.max_timeout),
+            )
+            .scope("core-types-domain")
+            .send();
+    }
+
     /// See [`Timeouts::duration_for`].
     pub fn duration_for(&self, timeout: Timeout) -> Duration {
+        // The kind travels as its name plus, for FinalizeHeight, its own duration:
+        // the oracle's value dialect has no constructor for a payload-carrying
+        // variant, and the spec models the kind the same way.
+        let (oracle_kind, oracle_finalize_ms) = match timeout.kind {
+            TimeoutKind::Propose => ("Propose", 0i64),
+            TimeoutKind::Prevote => ("Prevote", 0i64),
+            TimeoutKind::Precommit => ("Precommit", 0i64),
+            TimeoutKind::Rebroadcast => ("Rebroadcast", 0i64),
+            TimeoutKind::FinalizeHeight(duration) => ("FinalizeHeight", oracle_ms(duration)),
+        };
+
+        if quint_oracle::enabled() {
+            self.log_config_install();
+
+            if timeout.round.is_nil() {
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "Timeoutsduration_for_nil_round_panics",
+                )
+                .argument("kind", oracle_kind, Some("TIMEOUT_KINDS"))
+                .argument(
+                    "finalize_ms",
+                    oracle_finalize_ms,
+                    Some("FINALIZE_DURATIONS"),
+                )
+                .argument("round", timeout.round.as_i64(), Some("ROUNDS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("panic_timeout_nil_round"),
+                    ]),
+                    true,
+                )
+                .scope("core-types-domain")
+                .send();
+            }
+        }
+
         let round = timeout.round.as_u32().expect("Round must be defined");
 
         // Saturating arithmetic: `delta * round` with Duration's `Mul<u32>`
         // panics on overflow. The extrapolated per-round value is clamped
         // to `max_timeout` immediately after, so any saturation beyond the
         // cap is indistinguishable from a normal clamp.
-        match timeout.kind {
+        let duration = match timeout.kind {
             TimeoutKind::Propose => self
                 .propose
                 .saturating_add(self.propose_delta.saturating_mul(round))
@@ -123,7 +217,65 @@ impl LinearTimeouts {
                     .min(self.max_timeout)
             }
             TimeoutKind::FinalizeHeight(duration) => duration,
+        };
+
+        if quint_oracle::enabled() {
+            let per_round = !matches!(timeout.kind, TimeoutKind::FinalizeHeight(_));
+            let unclamped = match timeout.kind {
+                TimeoutKind::Propose => self
+                    .propose
+                    .saturating_add(self.propose_delta.saturating_mul(round)),
+                TimeoutKind::Prevote => self
+                    .prevote
+                    .saturating_add(self.prevote_delta.saturating_mul(round)),
+                TimeoutKind::Precommit => self
+                    .precommit
+                    .saturating_add(self.precommit_delta.saturating_mul(round)),
+                TimeoutKind::Rebroadcast => {
+                    let deltas = self
+                        .propose_delta
+                        .saturating_add(self.prevote_delta)
+                        .saturating_add(self.precommit_delta);
+                    self.rebroadcast.saturating_add(deltas.saturating_mul(round))
+                }
+                TimeoutKind::FinalizeHeight(duration) => duration,
+            };
+
+            let event =
+                quint_oracle::Event::builder(quint_oracle::current_test(), "Timeoutsduration_for")
+                    .argument("kind", oracle_kind, Some("TIMEOUT_KINDS"))
+                    .argument("finalize_ms", oracle_finalize_ms, Some("FINALIZE_DURATIONS"))
+                    .argument("round", timeout.round.as_i64(), Some("ROUNDS"));
+
+            // Both flags are monotone in the spec, so each is pinned only on a call
+            // that actually sets it.
+            let event = if per_round && unclamped > duration {
+                event.assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("timeout_clamped"),
+                    ]),
+                    true,
+                )
+            } else {
+                event
+            };
+            let event = if !per_round && duration > self.max_timeout {
+                event.assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("finalize_above_cap"),
+                    ]),
+                    true,
+                )
+            } else {
+                event
+            };
+
+            event.scope("core-types-domain").send();
         }
+
+        duration
     }
 }
 
@@ -144,6 +296,34 @@ mod tests {
         assert_eq!(timeouts.precommit_delta, Duration::from_millis(500));
         assert_eq!(timeouts.rebroadcast, Duration::from_secs(5)); // 3 + 1 + 1
         assert_eq!(timeouts.max_timeout, Duration::from_secs(60));
+    }
+
+    /// reproduces obs:zero_timeout_computed — fails on current code.
+    ///
+    /// An application supplies its timeouts through the middleware's
+    /// `get_timeouts` hook, which returns a `LinearTimeouts` built as a struct
+    /// literal over the defaults (see the test app's timeout middleware). All
+    /// the fields are public and nothing validates them, so an operator who
+    /// zeroes `propose` — "don't wait for a proposal" — gets a propose timeout
+    /// of zero at round 0, which expires immediately and prevotes nil before
+    /// any proposal can arrive. The model's
+    /// `computed_timeouts_are_positive_and_capped` requires every duration
+    /// `duration_for` produces to be strictly positive. A zero `max_timeout`
+    /// collapses every timeout kind the same way.
+    #[test]
+    #[ignore]
+    fn duration_for_never_returns_a_zero_timeout() {
+        let timeouts = LinearTimeouts {
+            propose: Duration::ZERO,
+            ..LinearTimeouts::default()
+        };
+
+        let propose_r0 = timeouts.duration_for(Timeout::propose(Round::new(0)));
+
+        assert!(
+            !propose_r0.is_zero(),
+            "propose timeout at round 0 expired immediately"
+        );
     }
 
     #[test]

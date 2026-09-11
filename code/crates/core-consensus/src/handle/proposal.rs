@@ -123,6 +123,7 @@ where
     // Store the proposal in the full proposal keeper
     state.store_proposal(signed_proposal.clone(), metrics);
 
+
     // Persist the proposal in the Write-Ahead Log before sending it over the network.
     perform!(
         co,
@@ -208,6 +209,22 @@ where
             expected = %expected_proposer,
             "Received proposal from a non-proposer"
         );
+
+        if quint_oracle::enabled() {
+            let oracle_validator: i64 = (0..validator_set.count())
+                .find(|i| {
+                    validator_set
+                        .get_by_index(*i)
+                        .is_some_and(|v| v.address() == proposer_address)
+                })
+                .map_or(-1, |i| i as i64);
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "drop_non_proposer")
+                .argument("validator", oracle_validator, Some("PROPOSERS"))
+                .argument("proposal_round", proposal_round.as_i64(), Some("PROPOSAL_ROUNDS"))
+                .scope("equivocation-detection")
+                .send();
+        }
 
         return Ok(false);
     };

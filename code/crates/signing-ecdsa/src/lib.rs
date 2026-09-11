@@ -199,6 +199,54 @@ impl<C: CurveConfig> Verifier<Signature<C>> for PublicKey<C> {
     }
 }
 
+/// Quint oracle: log a `SigningScheme` decode against the `signing` model. The
+/// projection lives in `malachitebft_signing::quint_ids`, the component's single
+/// first-seen index space. `curve` is the curve this config actually names, so a key
+/// from another curve reaches the model's `WrongCurve` arm.
+#[cfg(feature = "quint-oracle")]
+fn quint_log_decode(action: &'static str, bytes: &[u8], curve: i64, on_curve: bool) {
+    if !quint_oracle::enabled() {
+        return;
+    }
+
+    use malachitebft_signing::quint_ids as qids;
+
+    let key = if bytes.len() == 32 {
+        qids::key_bytes_id(bytes)
+    } else {
+        qids::FORGED_SIGNER
+    };
+
+    quint_oracle::Event::builder(quint_oracle::current_test(), action)
+        .argument(
+            "b",
+            qids::bytes_value(bytes.len() as i64, key, curve, on_curve),
+            None,
+        )
+        .assert(
+            Vec::from([
+                quint_oracle::PathSeg::ident("w"),
+                quint_oracle::PathSeg::ident("calls"),
+            ]),
+            qids::next_call(),
+        )
+        .scope("signing")
+        .send();
+}
+
+/// The model's curve id for a `CurveConfig`. The model carries one `LOCAL_CURVE`, so
+/// k256 — the crate's default curve and the one the tests use — maps onto it and every
+/// other curve is foreign, which is how a key reaches the `WrongCurve` arm.
+#[cfg(feature = "quint-oracle")]
+fn quint_curve_id<C: CurveConfig>() -> i64 {
+    use malachitebft_signing::quint_ids as qids;
+
+    match C::PUBLIC_KEY_TYPE {
+        "tendermint/PubKeySecp256k1" => qids::LOCAL_CURVE,
+        _ => qids::LOCAL_CURVE + 1,
+    }
+}
+
 /// Generic ECDSA signing scheme parameterized by the chosen curve configuration.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Ecdsa<C: CurveConfig>(PhantomData<C>);
@@ -230,7 +278,19 @@ impl<C: CurveConfig> SigningScheme for Ecdsa<C> {
     }
 
     fn decode_signature(bytes: &[u8]) -> Result<Self::Signature, Self::DecodingError> {
-        Signature::from_slice(bytes)
+        let result = Signature::from_slice(bytes);
+
+        // Quint oracle: fires on success AND failure — a rejected encoding is a
+        // distinct model arm, not an uninteresting non-event.
+        #[cfg(feature = "quint-oracle")]
+        quint_log_decode(
+            "decode_signature_op",
+            bytes,
+            quint_curve_id::<C>(),
+            result.is_ok(),
+        );
+
+        result
     }
 
     fn encode_public_key(public_key: &Self::PublicKey) -> Vec<u8> {
@@ -238,7 +298,19 @@ impl<C: CurveConfig> SigningScheme for Ecdsa<C> {
     }
 
     fn decode_public_key(bytes: &[u8]) -> Result<Self::PublicKey, Self::DecodingError> {
-        PublicKey::from_sec1_bytes(bytes)
+        let result = PublicKey::from_sec1_bytes(bytes);
+
+        // Quint oracle: a SEC1 decode failure is either a wrong length or a point this
+        // curve rejects; `on_curve` carries which, and `curve` carries whose curve.
+        #[cfg(feature = "quint-oracle")]
+        quint_log_decode(
+            "decode_public_key_op",
+            bytes,
+            quint_curve_id::<C>(),
+            result.is_ok(),
+        );
+
+        result
     }
 }
 
@@ -249,6 +321,7 @@ mod tests {
 
     use serde_json::{from_str, to_string};
 
+    #[cfg_attr(feature = "quint-oracle", quint_oracle::test)]
     #[test]
     fn k256_serialization_roundtrip() {
         let private_key_bytes = [0x11u8; 32];

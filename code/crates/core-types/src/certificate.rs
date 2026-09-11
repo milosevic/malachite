@@ -7,9 +7,57 @@ use malachitebft_peer::PeerId;
 use thiserror::Error;
 
 use crate::{
-    BoxError, Context, NilOrVal, Round, Signature, SignedExtension, SignedVote, ValueId, Vote,
-    VoteExtensions, VoteType, VotingPower,
+    BoxError, Context, Height, NilOrVal, Round, Signature, SignedExtension, SignedVote, ValueId,
+    Vote, VoteExtensions, VoteType, VotingPower,
 };
+
+/// Quint oracle: report the vote list a certificate constructor was handed, one
+/// event per vote. A list of records cannot travel as a single logged argument —
+/// replay only accepts a value the spec's own nondet set contains — so each vote
+/// arrives as its own event carrying plain ints and tokens.
+///
+/// `voter` is the vote's rank among the DISTINCT voters of this same list (repeats
+/// share a rank, which is what the dedupe logic keys on); the real addresses are
+/// seed-derived hex and there is no validator set here to rank them against.
+/// `value` is "Match" when the vote is for the certificate's own value, "Other" for
+/// a different id and "Nil" for a nil vote — exactly the distinction the filter
+/// makes. `value_id` is `None` for a round certificate, which has no value of its own.
+fn oracle_log_votes<Ctx: Context>(votes: &[SignedVote<Ctx>], value_id: Option<&ValueId<Ctx>>) {
+    quint_oracle::Event::builder(quint_oracle::current_test(), "certificate_votes_begin")
+        .scope("core-types-domain")
+        .send();
+
+    let mut distinct: Vec<alloc::string::String> = Vec::new();
+    for vote in votes {
+        let address = alloc::format!("{}", vote.validator_address());
+        if !distinct.contains(&address) {
+            distinct.push(address);
+        }
+    }
+
+    for vote in votes {
+        let address = alloc::format!("{}", vote.validator_address());
+        let voter = distinct.iter().position(|a| a == &address).unwrap_or(0) as i64;
+        let value = match (vote.value(), value_id) {
+            (NilOrVal::Nil, _) => "Nil",
+            (NilOrVal::Val(id), Some(own)) if id == own => "Match",
+            (NilOrVal::Val(_), _) => "Other",
+        };
+        let vote_type = match vote.vote_type() {
+            VoteType::Prevote => "Prevote",
+            VoteType::Precommit => "Precommit",
+        };
+
+        quint_oracle::Event::builder(quint_oracle::current_test(), "add_vote")
+            .argument("voter", voter, Some("ADDRESSES"))
+            .argument("height", vote.height().as_u64() as i64, Some("HEIGHTS"))
+            .argument("round", vote.round().as_i64(), Some("ROUNDS"))
+            .argument("value", value, Some("VOTE_VALUES"))
+            .argument("vote_type", vote_type, Some("VOTE_TYPES"))
+            .scope("core-types-domain")
+            .send();
+    }
+}
 
 /// Represents a signature for a commit certificate, with the address of the validator that produced it.
 #[derive_where(Clone, Debug, PartialEq, Eq)]
@@ -48,8 +96,14 @@ impl<Ctx: Context> CommitCertificate<Ctx> {
         value_id: ValueId<Ctx>,
         commits: Vec<SignedVote<Ctx>>,
     ) -> Self {
+        // Reported before the vector is consumed below.
+        let oracle_total = commits.len();
+        if quint_oracle::enabled() {
+            oracle_log_votes::<Ctx>(&commits, Some(&value_id));
+        }
+
         // Collect all commit signatures from the signed votes
-        let commit_signatures = commits
+        let commit_signatures: Vec<_> = commits
             .into_iter()
             .filter(|vote| {
                 matches!(vote.value(), NilOrVal::Val(id) if id == &value_id)
@@ -65,6 +119,16 @@ impl<Ctx: Context> CommitCertificate<Ctx> {
             })
             .collect();
 
+        if quint_oracle::enabled() {
+            log_scoped_certificate::<Ctx>(
+                "CommitCertificatenew",
+                height,
+                round,
+                oracle_total,
+                commit_signatures.len(),
+            );
+        }
+
         Self {
             height,
             round,
@@ -72,6 +136,50 @@ impl<Ctx: Context> CommitCertificate<Ctx> {
             commit_signatures,
         }
     }
+}
+
+/// Quint oracle: the shared event for the two scoped certificate constructors
+/// (commit and polka). `kept` is how many of the handed-in votes survived the
+/// constructor's own height/round/value/type filter, which is what the spec's
+/// `dropped_votes` / `kept_all_votes` observations distinguish.
+fn log_scoped_certificate<Ctx: Context>(
+    action: &'static str,
+    height: Ctx::Height,
+    round: Round,
+    handed_in: usize,
+    kept: usize,
+) {
+    let event = quint_oracle::Event::builder(quint_oracle::current_test(), action)
+        .argument("height", height.as_u64() as i64, Some("HEIGHTS"))
+        .argument("round", round.as_i64(), Some("ROUNDS"))
+        .argument("value_id", "Match", Some("VALUE_IDS"));
+
+    // `dropped_votes` and `kept_all_votes` are monotone in the spec, so each is
+    // pinned only on a call that actually sets it.
+    let event = if kept < handed_in {
+        event.assert(
+            Vec::from([
+                quint_oracle::PathSeg::ident("state"),
+                quint_oracle::PathSeg::ident("dropped_votes"),
+            ]),
+            true,
+        )
+    } else {
+        event
+    };
+    let event = if handed_in > 0 && kept == handed_in {
+        event.assert(
+            Vec::from([
+                quint_oracle::PathSeg::ident("state"),
+                quint_oracle::PathSeg::ident("kept_all_votes"),
+            ]),
+            true,
+        )
+    } else {
+        event
+    };
+
+    event.scope("core-types-domain").send();
 }
 
 /// A commit signature bundled with the (optional) vote extension that was attached
@@ -279,8 +387,13 @@ impl<Ctx: Context> PolkaCertificate<Ctx> {
         value_id: ValueId<Ctx>,
         votes: Vec<SignedVote<Ctx>>,
     ) -> Self {
+        let oracle_total = votes.len();
+        if quint_oracle::enabled() {
+            oracle_log_votes::<Ctx>(&votes, Some(&value_id));
+        }
+
         // Collect all polka signatures from the signed votes
-        let polka_signatures = votes
+        let polka_signatures: Vec<_> = votes
             .into_iter()
             .filter(|vote| {
                 matches!(vote.value(), NilOrVal::Val(id) if id == &value_id)
@@ -295,6 +408,16 @@ impl<Ctx: Context> PolkaCertificate<Ctx> {
                 )
             })
             .collect();
+
+        if quint_oracle::enabled() {
+            log_scoped_certificate::<Ctx>(
+                "PolkaCertificatenew",
+                height,
+                round,
+                oracle_total,
+                polka_signatures.len(),
+            );
+        }
 
         Self {
             height,
@@ -444,6 +567,43 @@ impl<Ctx: Context> RoundCertificate<Ctx> {
         cert_type: RoundCertificateType,
         votes: Vec<SignedVote<Ctx>>,
     ) -> Self {
+        if quint_oracle::enabled() {
+            let oracle_kind = match cert_type {
+                RoundCertificateType::Skip => "Skip",
+                RoundCertificateType::Precommit => "Precommit",
+            };
+            let foreign = votes
+                .iter()
+                .any(|v| v.height() != height || v.round() != round);
+
+            // This constructor has no value of its own, so no vote can be "Match".
+            oracle_log_votes::<Ctx>(&votes, None);
+
+            let event = quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "RoundCertificatenew_from_votes",
+            )
+            .argument("height", height.as_u64() as i64, Some("HEIGHTS"))
+            .argument("round", round.as_i64(), Some("ROUNDS"))
+            .argument("cert_type", oracle_kind, Some("CERT_ROUND_KINDS"));
+
+            // This constructor applies no filter at all, so a vote from another
+            // height or round is kept — the spec latches that, monotonically.
+            let event = if foreign {
+                event.assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("round_cert_kept_foreign"),
+                    ]),
+                    true,
+                )
+            } else {
+                event
+            };
+
+            event.scope("core-types-domain").send();
+        }
+
         RoundCertificate {
             height,
             round,
@@ -516,6 +676,35 @@ impl<Ctx: Context> EnterRoundCertificate<Ctx> {
                 )
             })
             .collect();
+
+        if quint_oracle::enabled() {
+            let oracle_kind = match cert_type {
+                RoundCertificateType::Skip => "Skip",
+                RoundCertificateType::Precommit => "Precommit",
+            };
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "EnterRoundCertificatefrom_commit_certificate",
+            )
+            .argument(
+                "height",
+                certificate.height.as_u64() as i64,
+                Some("HEIGHTS"),
+            )
+            .argument("round", certificate.round.as_i64(), Some("ROUNDS"))
+            .argument("value_id", "Match", Some("VALUE_IDS"))
+            .argument("cert_type", oracle_kind, Some("CERT_ROUND_KINDS"))
+            .argument("enter_round", enter_round.as_i64(), Some("ROUNDS"))
+            .assert(
+                Vec::from([
+                    quint_oracle::PathSeg::ident("state"),
+                    quint_oracle::PathSeg::ident("lifted_enter_round_cert"),
+                ]),
+                true,
+            )
+            .scope("core-types-domain")
+            .send();
+        }
 
         Self {
             certificate: RoundCertificate {

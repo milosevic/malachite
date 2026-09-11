@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 
@@ -20,12 +21,52 @@ where
 
     /// Increment the height by one.
     fn increment(&self) -> Self {
-        self.increment_by(1)
+        let incremented = self.increment_by(1);
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Heightincrement_by")
+                .argument("from", self.as_u64(), Some("HEIGHTS"))
+                .argument("by", 1i64, None)
+                .scope("core-types-domain")
+                .send();
+        }
+
+        incremented
     }
 
     /// Decrement the height by one.
     fn decrement(&self) -> Option<Self> {
-        self.decrement_by(1)
+        let decremented = self.decrement_by(1);
+
+        // Only the arguments are pinned, deliberately: the two Height impls in this
+        // repo disagree about the result below the minimum (the test context
+        // saturates and returns Some, the core-types unit test's own impl returns
+        // None), so asserting a result here would report one of them as a replay
+        // violation. The contract itself lives in the spec's
+        // decrement_below_minimum_returns_none invariant.
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Heightdecrement_by")
+                .argument("from", self.as_u64(), Some("HEIGHTS"))
+                .argument("by", 1i64, None)
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("last_decrement_from"),
+                    ]),
+                    self.as_u64(),
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("last_decrement_by"),
+                    ]),
+                    1i64,
+                )
+                .scope("core-types-domain")
+                .send();
+        }
+
+        decremented
     }
 
     /// Increment this height by the given amount.

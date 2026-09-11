@@ -57,6 +57,7 @@ impl CertificateBuilder for RoundPrecommit {
 
 /// Tests the verification of a valid SkipRoundCertificate with signatures from validators
 /// representing more than 1/3 of the total voting power.
+#[quint_oracle::test]
 #[test]
 fn valid_round_skip_certificate_with_sufficient_voting_power() {
     // SkipRoundCertificate from prevotes
@@ -147,6 +148,7 @@ fn valid_round_skip_certificate_with_sufficient_voting_power() {
 
 /// Tests the verification of a valid SkipRoundCertificate with signatures from validators
 /// representing more than 1/3 of the total voting power with random mixed votes.
+#[quint_oracle::test]
 #[test]
 fn valid_round_skip_certificate_with_mixed_votes_with_sufficient_voting_power() {
     for _ in 0..1000 {
@@ -169,6 +171,7 @@ fn valid_round_skip_certificate_with_mixed_votes_with_sufficient_voting_power() 
 
 /// Tests the verification of a valid PrecommitRoundCertificate with signatures from validators
 /// representing more than 2/3 of the total voting power.
+#[quint_oracle::test]
 #[test]
 fn valid_round_precommit_certificate_with_sufficient_voting_power() {
     // PrecommitRoundCertificate from precommits
@@ -211,6 +214,7 @@ fn valid_round_precommit_certificate_with_sufficient_voting_power() {
 
 /// Tests the verification of a valid PrecommitRoundCertificate with signatures from validators
 /// representing more than 2/3 of the total voting power with random mixed votes.
+#[quint_oracle::test]
 #[test]
 fn valid_round_precommit_certificate_with_mixed_votes_with_sufficient_voting_power() {
     for _ in 0..1000 {
@@ -228,6 +232,7 @@ fn valid_round_precommit_certificate_with_mixed_votes_with_sufficient_voting_pow
 
 /// Tests the verification of a skip round certificate with signatures from validators
 /// representing exactly the threshold amount of voting power.
+#[quint_oracle::test]
 #[test]
 fn valid_round_skip_certificate_with_exact_threshold_voting_power() {
     CertificateTest::<RoundSkip>::new()
@@ -244,6 +249,7 @@ fn valid_round_skip_certificate_with_exact_threshold_voting_power() {
 
 /// Tests the verification of a precommit round certificate with signatures from validators
 /// representing exactly the threshold amount of voting power.
+#[quint_oracle::test]
 #[test]
 fn valid_round_precommit_certificate_with_exact_threshold_voting_power() {
     CertificateTest::<RoundPrecommit>::new()
@@ -258,6 +264,7 @@ fn valid_round_precommit_certificate_with_exact_threshold_voting_power() {
 }
 
 /// Tests the verification of a skip round certificate with valid signatures but insufficient voting power.
+#[quint_oracle::test]
 #[test]
 fn invalid_round_skip_certificate_insufficient_voting_power() {
     CertificateTest::<RoundSkip>::new()
@@ -280,6 +287,7 @@ fn invalid_round_skip_certificate_insufficient_voting_power() {
 }
 
 /// Tests the verification of a precommit round certificate with valid signatures but insufficient voting power.
+#[quint_oracle::test]
 #[test]
 fn invalid_round_precommit_certificate_insufficient_voting_power() {
     CertificateTest::<RoundPrecommit>::new()
@@ -301,6 +309,7 @@ fn invalid_round_precommit_certificate_insufficient_voting_power() {
         });
 }
 
+#[quint_oracle::test]
 #[test]
 fn invalid_round_certificate_signed_voting_power_overflow() {
     let (validators, signers) = make_validators([u64::MAX, 1], DEFAULT_SEED);
@@ -376,6 +385,7 @@ fn invalid_round_certificate_signed_voting_power_overflow() {
 }
 
 /// Tests the verification of a round certificate containing multiple votes from the same validator.
+#[quint_oracle::test]
 #[test]
 fn invalid_round_certificate_duplicate_validator_vote() {
     let validator_addr = {
@@ -397,6 +407,7 @@ fn invalid_round_certificate_duplicate_validator_vote() {
 }
 
 /// Tests the verification of a round certificate containing a vote from a validator not in the validator set.
+#[quint_oracle::test]
 #[test]
 fn invalid_round_certificate_unknown_validator() {
     let seed = 0xcafecafe;
@@ -423,6 +434,7 @@ fn invalid_round_certificate_unknown_validator() {
 ///
 /// The certificate is rejected as soon as a single bad signature is encountered,
 /// regardless of whether the remaining valid signatures meet the threshold.
+#[quint_oracle::test]
 #[test]
 fn invalid_round_certificate_invalid_signature() {
     CertificateTest::<RoundSkip>::new()
@@ -443,6 +455,7 @@ fn invalid_round_certificate_invalid_signature() {
 /// The validator signed over the wrong (height, round), so when the verifier reconstructs
 /// the vote at the certificate's height/round the signature does not verify, and we reject
 /// on the bad entry instead of just skipping it.
+#[quint_oracle::test]
 #[test]
 fn invalid_polka_certificate_wrong_vote_height_round() {
     CertificateTest::<RoundSkip>::new()
@@ -471,6 +484,7 @@ fn invalid_polka_certificate_wrong_vote_height_round() {
 }
 
 /// Tests the verification of a certificate with no votes.
+#[quint_oracle::test]
 #[test]
 fn empty_round_certificate() {
     CertificateTest::<RoundSkip>::new()
@@ -498,6 +512,7 @@ fn empty_round_certificate() {
 /// the valid subset of signatures still meets the certificate's threshold (1/3 for
 /// `Skip`, 2/3 for `Precommit`). No single bad
 /// signature should be re-injected as `DriverInput::Vote`.
+#[quint_oracle::test]
 #[test]
 fn round_certificate_with_mixed_valid_and_invalid_votes() {
     CertificateTest::<RoundSkip>::new()
@@ -538,6 +553,7 @@ fn round_certificate_with_mixed_valid_and_invalid_votes() {
 ///
 /// The spoofed signature is invalid for the claimed validator's pubkey, so the
 /// certificate is rejected outright.
+#[quint_oracle::test]
 #[test]
 fn round_skip_certificate_address_spoofing_attack() {
     // Validators: [10, 90]. Spoofed sig claims validator 1 (VP=90)
@@ -550,6 +566,7 @@ fn round_skip_certificate_address_spoofing_attack() {
 }
 
 /// Address spoofing in a PrecommitRound certificate (2/3+ threshold).
+#[quint_oracle::test]
 #[test]
 fn round_precommit_certificate_address_spoofing_attack() {
     CertificateTest::<RoundPrecommit>::new()
@@ -566,6 +583,7 @@ fn round_precommit_certificate_address_spoofing_attack() {
 /// `height = 1` but the verifier reconstructs each entry using the
 /// certificate's `height = 2`, so verification fails on every entry and the
 /// certificate is rejected on the first invalid signature.
+#[quint_oracle::test]
 #[test]
 fn round_skip_certificate_signature_replay_across_heights() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -622,6 +640,7 @@ fn round_skip_certificate_signature_replay_across_heights() {
 ///
 /// Same scenario as the Skip variant above, but with precommit signatures and
 /// a Precommit-typed `RoundCertificate` being forged at a different height.
+#[quint_oracle::test]
 #[test]
 fn round_precommit_certificate_signature_replay_across_heights() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -680,6 +699,7 @@ fn round_precommit_certificate_signature_replay_across_heights() {
 /// forges a Skip `RoundCertificate` claiming `round = 1` and copies those real
 /// signatures into it. Verification reconstructs each entry at `round = 1` and
 /// fails on every signature, and the certificate is rejected on the first failure.
+#[quint_oracle::test]
 #[test]
 fn round_skip_certificate_signature_replay_across_rounds() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -736,6 +756,7 @@ fn round_skip_certificate_signature_replay_across_rounds() {
 ///
 /// Same scenario as the Skip variant above, but with precommit signatures and
 /// a Precommit-typed `RoundCertificate` being forged at a different round.
+#[quint_oracle::test]
 #[test]
 fn round_precommit_certificate_signature_replay_across_rounds() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -797,6 +818,7 @@ fn round_precommit_certificate_signature_replay_across_rounds() {
 /// 42 while the forged signatures claim value 99. The verifier reconstructs
 /// each prevote with `value_id = 99`, so the bytewise-valid signatures fail
 /// and the certificate is rejected on the first failure.
+#[quint_oracle::test]
 #[test]
 fn round_skip_certificate_signature_replay_across_values() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -853,6 +875,7 @@ fn round_skip_certificate_signature_replay_across_values() {
 /// Same scenario as the Skip variant above, but with precommit signatures and
 /// a Precommit-typed `RoundCertificate`. Each forged `RoundSignature` claims
 /// value 99 while reusing the bytewise-valid signatures over value 42.
+#[quint_oracle::test]
 #[test]
 fn round_precommit_certificate_signature_replay_across_values() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -910,6 +933,7 @@ fn round_precommit_certificate_signature_replay_across_values() {
 /// `VoteType::Prevote`. A Precommit certificate must only contain
 /// precommit-typed entries, so the mismatch is caught up-front by the explicit
 /// `InvalidVoteType` check before signature verification ever runs.
+#[quint_oracle::test]
 #[test]
 fn round_precommit_certificate_cross_type_replay_from_prevote() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -969,6 +993,7 @@ fn round_precommit_certificate_cross_type_replay_from_prevote() {
 /// signature against it. The bytes were signed over a precommit message, so
 /// verification fails on every entry and the certificate is rejected on the
 /// first invalid signature.
+#[quint_oracle::test]
 #[test]
 fn round_skip_certificate_cross_type_replay_flipped_vote_type() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -1022,6 +1047,7 @@ fn round_skip_certificate_cross_type_replay_flipped_vote_type() {
 }
 
 /// Validator set mismatch for SkipRound certificate.
+#[quint_oracle::test]
 #[test]
 fn round_skip_certificate_validator_set_mismatch() {
     let (validators_a, signers_a) = make_validators([25, 25, 25, 25], 0xAAAA);
@@ -1057,6 +1083,7 @@ fn round_skip_certificate_validator_set_mismatch() {
 }
 
 /// Validator set mismatch for PrecommitRound certificate.
+#[quint_oracle::test]
 #[test]
 fn round_precommit_certificate_validator_set_mismatch() {
     let (validators_a, signers_a) = make_validators([25, 25, 25, 25], 0xAAAA);
@@ -1093,6 +1120,7 @@ fn round_precommit_certificate_validator_set_mismatch() {
 
 /// Quorum boundary for SkipRound: exactly 1/3 is NOT sufficient (strict >).
 /// With validators [1, 1, 1] and 1 of 3 signing: 1*3=3 > 3*1=3 is false.
+#[quint_oracle::test]
 #[test]
 fn round_skip_certificate_quorum_boundary_exact_one_third_insufficient() {
     CertificateTest::<RoundSkip>::new()
@@ -1107,6 +1135,7 @@ fn round_skip_certificate_quorum_boundary_exact_one_third_insufficient() {
 
 /// Quorum boundary for SkipRound: just above 1/3 is sufficient.
 /// With validators [1, 1, 1] and 2 of 3 signing: 2*3=6 > 3*1=3, yes.
+#[quint_oracle::test]
 #[test]
 fn round_skip_certificate_quorum_boundary_just_above_one_third_sufficient() {
     CertificateTest::<RoundSkip>::new()
@@ -1117,6 +1146,7 @@ fn round_skip_certificate_quorum_boundary_just_above_one_third_sufficient() {
 
 /// Quorum boundary for PrecommitRound: exactly 2/3 is NOT sufficient (strict >).
 /// With validators [1, 1, 1] and 2 of 3 signing: 2*3=6 > 3*2=6 is false.
+#[quint_oracle::test]
 #[test]
 fn round_precommit_certificate_quorum_boundary_exact_two_thirds_insufficient() {
     CertificateTest::<RoundPrecommit>::new()
@@ -1131,6 +1161,7 @@ fn round_precommit_certificate_quorum_boundary_exact_two_thirds_insufficient() {
 
 /// Quorum boundary for PrecommitRound: just above 2/3 is sufficient.
 /// With validators [34, 33, 33], signing [0, 1] (VP=67): 67*3=201 > 100*2=200.
+#[quint_oracle::test]
 #[test]
 fn round_precommit_certificate_quorum_boundary_just_above_two_thirds_sufficient() {
     CertificateTest::<RoundPrecommit>::new()

@@ -1,8 +1,7 @@
 //! For storing proposals.
 
 use alloc::collections::BTreeMap;
-use alloc::vec;
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use derive_where::derive_where;
 
@@ -179,6 +178,11 @@ pub struct ProposalKeeper<Ctx>
 where
     Ctx: Context,
 {
+    /// Addresses in first-seen order, giving each validator a stable index for
+    /// oracle events. Only populated while the Quint oracle is enabled, and read
+    /// by nothing else — it takes no part in equality, ordering or the public API.
+    oracle_addresses: Vec<Ctx::Address>,
+
     /// The proposal for each round.
     per_round: BTreeMap<Round, PerRound<Ctx>>,
 
@@ -222,8 +226,38 @@ where
         &self.per_round
     }
 
+    /// This address's stable index for oracle events, assigned on first sight.
+    fn oracle_validator_index(&mut self, address: &Ctx::Address) -> i64 {
+        match self.oracle_addresses.iter().position(|a| a == address) {
+            Some(i) => i as i64,
+            None => {
+                self.oracle_addresses.push(address.clone());
+                (self.oracle_addresses.len() - 1) as i64
+            }
+        }
+    }
+
+    /// Recorded evidence sizes as (pairs, addresses), without logging a read.
+    pub(crate) fn evidence_counts(&self) -> (usize, usize) {
+        (self.evidence.pair_count(), self.evidence.len())
+    }
+
     /// Return the evidence of equivocation.
     pub fn evidence(&self) -> &EvidenceMap<Ctx> {
+        if quint_oracle::enabled() && !self.evidence.is_empty() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "read_proposal_evidence")
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("proposalPairs")]),
+                    self.evidence.pair_count() as i64,
+                )
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("proposalAddrs")]),
+                    self.evidence.len() as i64,
+                )
+                .scope("equivocation-detection")
+                .send();
+        }
+
         &self.evidence
     }
 
@@ -241,10 +275,58 @@ where
         proposal: SignedProposal<Ctx>,
         validity: Validity,
     ) -> StoreProposalResult<Ctx> {
-        self.per_round
+        let oracle_on = quint_oracle::enabled();
+        let oracle_validator = if oracle_on {
+            self.oracle_validator_index(&proposal.validator_address().clone())
+        } else {
+            -1
+        };
+        let oracle_round = proposal.round().as_i64();
+        let oracle_value = if oracle_on {
+            alloc::format!("{}", proposal.message.value().id())
+        } else {
+            alloc::string::String::new()
+        };
+        let oracle_pol_round = proposal.message.pol_round().as_i64();
+        let oracle_validity = match validity {
+            Validity::Valid => "Valid",
+            Validity::Invalid => "Invalid",
+        };
+
+        let result = self
+            .per_round
             .entry(proposal.round())
             .or_default()
-            .add(proposal, validity)
+            .add(proposal, validity);
+
+        if oracle_on {
+            let oracle_counts = self.evidence_counts();
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "store_proposal")
+                .argument("validator", oracle_validator, Some("PROPOSERS"))
+                .argument("proposal_round", oracle_round, Some("PROPOSAL_ROUNDS"))
+                .argument("value", oracle_value.as_str(), Some("PROPOSAL_VALUES"))
+                .argument("pol_round", oracle_pol_round, Some("POL_ROUNDS"))
+                .argument("validity", oracle_validity, Some("VALIDITIES"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("proposalPairs"),
+                    ]),
+                    oracle_counts.0 as i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("abortedFlag"),
+                    ]),
+                    0i64,
+                )
+                .scope("equivocation-detection")
+                .send();
+        }
+
+        result
     }
 
     /// Record a pair of equivocating proposals directly in the evidence map.
@@ -266,6 +348,59 @@ where
             value_id = %conflicting.message.value().id(),
             "Received equivocating proposal"
         );
+        let oracle_on = quint_oracle::enabled();
+        let oracle_validator = if oracle_on {
+            self.oracle_validator_index(&conflicting.validator_address().clone())
+        } else {
+            -1
+        };
+        let oracle_round = conflicting.round().as_i64();
+        let oracle_existing_value = if oracle_on {
+            alloc::format!("{}", existing.message.value().id())
+        } else {
+            alloc::string::String::new()
+        };
+        let oracle_conflicting_value = if oracle_on {
+            alloc::format!("{}", conflicting.message.value().id())
+        } else {
+            alloc::string::String::new()
+        };
+        let oracle_existing_pol = existing.message.pol_round().as_i64();
+        let oracle_conflicting_pol = conflicting.message.pol_round().as_i64();
+
+        if oracle_on {
+            // The surfaced pair is reported here; EvidenceMap::add performs and
+            // logs the write itself, so this event records no evidence change.
+            quint_oracle::Event::builder(quint_oracle::current_test(), "record_proposal_evidence")
+                .argument("validator", oracle_validator, Some("PROPOSERS"))
+                .argument("proposal_round", oracle_round, Some("PROPOSAL_ROUNDS"))
+                .argument(
+                    "existing_value",
+                    oracle_existing_value.as_str(),
+                    Some("PROPOSAL_VALUES"),
+                )
+                .argument("existing_pol_round", oracle_existing_pol, Some("POL_ROUNDS"))
+                .argument(
+                    "conflicting_value",
+                    oracle_conflicting_value.as_str(),
+                    Some("PROPOSAL_VALUES"),
+                )
+                .argument(
+                    "conflicting_pol_round",
+                    oracle_conflicting_pol,
+                    Some("POL_ROUNDS"),
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("proposalPairs"),
+                    ]),
+                    self.evidence.pair_count() as i64,
+                )
+                .scope("equivocation-detection")
+                .send();
+        }
+
         self.evidence.add(existing, conflicting);
     }
 }
@@ -311,6 +446,22 @@ where
             conflicting.validator_address()
         );
 
+        let oracle_on = quint_oracle::enabled();
+        let oracle_address = conflicting.validator_address().clone();
+        let oracle_round = conflicting.round().as_i64();
+        let oracle_existing_value = if oracle_on {
+            alloc::format!("{}", existing.message.value().id())
+        } else {
+            alloc::string::String::new()
+        };
+        let oracle_conflicting_value = if oracle_on {
+            alloc::format!("{}", conflicting.message.value().id())
+        } else {
+            alloc::string::String::new()
+        };
+        let oracle_existing_pol = existing.message.pol_round().as_i64();
+        let oracle_conflicting_pol = conflicting.message.pol_round().as_i64();
+
         if let Some(evidence) = self.map.get_mut(conflicting.validator_address()) {
             // Check if this evidence already exists (in either order)
             let already_exists = evidence.iter().any(|(e, c)| {
@@ -325,11 +476,63 @@ where
                 vec![(existing, conflicting)],
             );
         }
+
+        if oracle_on {
+            // This type holds no validator set, so `validator` is the address's
+            // rank in this map's key order — a stable identity for a fixed set
+            // of equivocators, which is what the per-validator list needs.
+            let oracle_validator: i64 = self
+                .map
+                .keys()
+                .position(|address| address == &oracle_address)
+                .map_or(-1, |i| i as i64);
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "proposal_evidence_add")
+                .argument("validator", oracle_validator, Some("PROPOSERS"))
+                .argument("proposal_round", oracle_round, Some("PROPOSAL_ROUNDS"))
+                .argument(
+                    "existing_value",
+                    oracle_existing_value.as_str(),
+                    Some("PROPOSAL_VALUES"),
+                )
+                .argument("existing_pol_round", oracle_existing_pol, Some("POL_ROUNDS"))
+                .argument(
+                    "conflicting_value",
+                    oracle_conflicting_value.as_str(),
+                    Some("PROPOSAL_VALUES"),
+                )
+                .argument(
+                    "conflicting_pol_round",
+                    oracle_conflicting_pol,
+                    Some("POL_ROUNDS"),
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("proposalPairs"),
+                    ]),
+                    self.pair_count() as i64,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("ghost"),
+                        quint_oracle::PathSeg::ident("proposalAddrs"),
+                    ]),
+                    self.map.len() as i64,
+                )
+                .scope("equivocation-detection")
+                .send();
+        }
     }
 
     /// Return the number of addresses with recorded proposal equivocations.
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    /// Total number of recorded equivocation pairs across all validators.
+    pub(crate) fn pair_count(&self) -> usize {
+        self.map.values().map(|pairs| pairs.len()).sum()
     }
 
     /// Iterate over all addresses with recorded proposal equivocations.

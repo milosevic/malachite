@@ -17,12 +17,18 @@ std = []
 serde = ["dep:serde", "dep:base64"]
 rand = ["dep:rand"]
 zeroize = ["dep:zeroize"]
+# Quint Studio oracle instrumentation for the SigningScheme decoders. Off by default,
+# so `no_std` and production builds compile none of it.
+quint-oracle = ["dep:quint-oracle", "malachitebft-signing/quint-oracle"]
 
 [dependencies]
 malachitebft-core-types = { workspace = true }
 
 signature = { workspace = true }
 ed25519-consensus = { workspace = true }
+
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust", optional = true }
+malachitebft-signing = { workspace = true, optional = true }
 
 # Optional dependencies
 rand = { workspace = true, optional = true }   # rand

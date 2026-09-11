@@ -160,6 +160,14 @@ impl Metrics {
     pub fn register(registry: &SharedRegistry) -> Self {
         let metrics = Self::new();
 
+        // Registering the whole consensus metric family under one prefix; the
+        // code does not check whether it already ran for this registry.
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Metricsregister")
+                .scope("node-config")
+                .send();
+        }
+
         registry.with_prefix("malachitebft_core_consensus", |registry| {
             registry.register(
                 "consensus_time",
@@ -398,5 +406,44 @@ impl AtomicInstant {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// reproduces obs:metric_registered_twice — fails on current code.
+    ///
+    /// `Metrics::register` registers the consensus metric family under one
+    /// prefix and does not check whether it already ran for this registry. A
+    /// node that is restarted in-process registers onto the same shared
+    /// registry a second time (apps build theirs from
+    /// `SharedRegistry::global().with_moniker(..)`, so the same moniker gives
+    /// the same underlying registry), and the exported Prometheus text then
+    /// carries every consensus series twice. The model's
+    /// `metric_names_registered_at_most_once` forbids that.
+    #[test]
+    #[ignore]
+    fn registering_the_consensus_metrics_twice_does_not_duplicate_series() {
+        let registry = SharedRegistry::global().with_moniker("node-1");
+
+        let _first = Metrics::register(&registry);
+        let _restarted = Metrics::register(&registry);
+
+        let mut exported = String::new();
+        crate::export(&mut exported);
+
+        let type_lines = exported
+            .lines()
+            .filter(|line| {
+                line.starts_with("# TYPE malachitebft_core_consensus_consensus_time")
+            })
+            .count();
+
+        assert_eq!(
+            type_lines, 1,
+            "consensus_time was exported {type_lines} times"
+        );
     }
 }

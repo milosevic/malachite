@@ -208,6 +208,7 @@ where
             self.proposal_keeper.record_evidence(existing, conflicting);
         }
 
+
         self.multiplex_proposal(proposal, validity)
     }
 

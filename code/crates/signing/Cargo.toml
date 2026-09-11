@@ -13,8 +13,16 @@ readme = "../../../README.md"
 all-features = true
 
 [features]
+# Quint Studio `signing`-scoped oracle instrumentation: the `quint_ids` projection and
+# the certificate log sites. Off by default, so those compile away entirely.
+#
+# The dependency itself is NOT optional, because the `core-types-domain` pipeline's
+# instrumentation in `src/ext.rs` uses the client ungated. Once that is gated too, this
+# should become `quint-oracle = ["dep:quint-oracle"]` and the dependency `optional`.
+quint-oracle = []
 
 [dependencies]
+quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
 malachitebft-core-types = { workspace = true }
 
 async-trait = { workspace = true }

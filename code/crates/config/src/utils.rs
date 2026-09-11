@@ -18,6 +18,16 @@ where
         where
             E: de::Error,
         {
+            if quint_oracle::enabled() {
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "bool_from_anything_bool",
+                )
+                .argument("value", v, None)
+                .scope("node-config")
+                .send();
+            }
+
             Ok(v)
         }
 
@@ -25,6 +35,16 @@ where
         where
             E: de::Error,
         {
+            // The outcome is a pure function of `v` and the visitor always
+            // completes — either with a bool or with a deserialization error,
+            // both of which the spec records.
+            if quint_oracle::enabled() {
+                quint_oracle::Event::builder(quint_oracle::current_test(), "bool_from_anything_str")
+                    .argument("value", v, Some("BOOL_STRINGS"))
+                    .scope("node-config")
+                    .send();
+            }
+
             match v {
                 "true" => Ok(true),
                 "false" => Ok(false),

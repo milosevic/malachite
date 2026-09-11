@@ -18,6 +18,40 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod serializers;
 
+/// Quint oracle: log a `SigningScheme` decode against the `signing` model. The
+/// projection lives in `malachitebft_signing::quint_ids`, the component's single
+/// first-seen index space, so a key named here keeps the index it has everywhere else.
+#[cfg(feature = "quint-oracle")]
+fn quint_log_decode(action: &'static str, bytes: &[u8], on_curve: bool) {
+    if !quint_oracle::enabled() {
+        return;
+    }
+
+    use malachitebft_signing::quint_ids as qids;
+
+    let key = if bytes.len() == 32 {
+        qids::key_bytes_id(bytes)
+    } else {
+        qids::FORGED_SIGNER
+    };
+
+    quint_oracle::Event::builder(quint_oracle::current_test(), action)
+        .argument(
+            "b",
+            qids::bytes_value(bytes.len() as i64, key, qids::LOCAL_CURVE, on_curve),
+            None,
+        )
+        .assert(
+            Vec::from([
+                quint_oracle::PathSeg::ident("w"),
+                quint_oracle::PathSeg::ident("calls"),
+            ]),
+            qids::next_call(),
+        )
+        .scope("signing")
+        .send();
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Ed25519;
 
@@ -44,7 +78,14 @@ impl SigningScheme for Ed25519 {
     }
 
     fn decode_signature(bytes: &[u8]) -> Result<Self::Signature, Self::DecodingError> {
-        Signature::try_from(bytes)
+        let result = Signature::try_from(bytes);
+
+        // Quint oracle: fires on success AND failure — the model's arms are the
+        // distinct decode causes, so a rejected encoding is the interesting case.
+        #[cfg(feature = "quint-oracle")]
+        quint_log_decode("decode_signature_op", bytes, true);
+
+        result
     }
 
     fn encode_public_key(public_key: &PublicKey) -> Vec<u8> {
@@ -52,9 +93,21 @@ impl SigningScheme for Ed25519 {
     }
 
     fn decode_public_key(bytes: &[u8]) -> Result<Self::PublicKey, Self::DecodingError> {
-        let arr: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| ed25519_consensus::Error::InvalidSliceLength)?;
+        let arr: Result<[u8; 32], _> = bytes.try_into();
+
+        // Quint oracle: the two failure causes are distinct model arms — a wrong slice
+        // length, and a right-length value that is not a curve point.
+        #[cfg(feature = "quint-oracle")]
+        {
+            let on_curve = arr
+                .as_ref()
+                .ok()
+                .map(|a| PublicKey::from_bytes(*a).is_ok())
+                .unwrap_or(false);
+            quint_log_decode("decode_public_key_op", bytes, on_curve);
+        }
+
+        let arr = arr.map_err(|_| ed25519_consensus::Error::InvalidSliceLength)?;
         PublicKey::from_bytes(arr)
     }
 }
@@ -234,6 +287,7 @@ mod tests {
         b
     };
 
+    #[cfg_attr(feature = "quint-oracle", quint_oracle::test)]
     #[test]
     fn public_key_from_bytes_valid() {
         let seed = [1u8; 32];
@@ -246,18 +300,21 @@ mod tests {
         assert_eq!(result.unwrap().as_bytes(), &bytes);
     }
 
+    #[cfg_attr(feature = "quint-oracle", quint_oracle::test)]
     #[test]
     fn public_key_from_bytes_invalid_curve_point() {
         let result = PublicKey::from_bytes(INVALID_ED25519_POINT);
         assert!(result.is_err(), "non-curve-point should be rejected");
     }
 
+    #[cfg_attr(feature = "quint-oracle", quint_oracle::test)]
     #[test]
     fn decode_public_key_invalid_curve_point() {
         let result = Ed25519::decode_public_key(&INVALID_ED25519_POINT);
         assert!(result.is_err(), "non-curve-point should be rejected");
     }
 
+    #[cfg_attr(feature = "quint-oracle", quint_oracle::test)]
     #[test]
     fn decode_public_key_invalid_length() {
         let short_bytes = [0u8; 16];
@@ -271,6 +328,7 @@ mod zeroize_tests {
     use super::*;
     use zeroize::Zeroize;
 
+    #[cfg_attr(feature = "quint-oracle", quint_oracle::test)]
     #[test]
     fn private_key_zeroize() {
         let seed = [0x42; 32];

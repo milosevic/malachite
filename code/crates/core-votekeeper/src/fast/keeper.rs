@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use derive_where::derive_where;
 
 use malachitebft_core_types::{
-    Context, NilOrVal, Round, SignedVote, Validator, ValidatorSet, ValueId, Vote,
+    Context, NilOrVal, Round, SignedVote, Validator, ValidatorSet, ValueId, Vote, VoteType,
 };
 
 use crate::evidence::EvidenceMap;
@@ -103,6 +103,14 @@ impl<Ctx: Context> FastVoteKeeper<Ctx> {
     /// validator already counted becomes evidence and is **not** tallied, so equivocation
     /// cannot manufacture a quorum.
     pub fn apply_vote(&mut self, signed_vote: SignedVote<Ctx>) -> Vec<Output<Ctx>> {
+        // Fast Tendermint has ONE voting step, which the paper names precommit. A prevote
+        // is not part of this protocol, so it is discarded rather than tallied — counting
+        // it would let a value reach a threshold on votes the protocol never defined, and
+        // would misread a prevote/precommit pair from one validator as equivocation.
+        if signed_vote.vote_type() != VoteType::Precommit {
+            return Vec::new();
+        }
+
         let Some(validator) = self.validator_set.get_by_address(signed_vote.validator_address())
         else {
             // Not in the set: no state is created for it.

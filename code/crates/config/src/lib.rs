@@ -85,6 +85,33 @@ impl ChannelNames {
             ("liveness", self.liveness.as_str()),
         ];
 
+        // The verdict is a pure function of `self`, so the transition is logged
+        // once here with the names it validates, whichever way it exits.
+        if quint_oracle::enabled() {
+            use quint_oracle::ToLogged as _;
+            quint_oracle::Event::builder(quint_oracle::current_test(), "ChannelNamesvalidate")
+                .argument(
+                    "names",
+                    quint_oracle::record([
+                        ("consensus", self.consensus.to_logged()),
+                        ("proposal_parts", self.proposal_parts.to_logged()),
+                        ("sync", self.sync.to_logged()),
+                        ("liveness", self.liveness.to_logged()),
+                    ]),
+                    Some("CHANNEL_SETS"),
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("channels"),
+                        quint_oracle::PathSeg::ident("consensus"),
+                    ],
+                    self.consensus.as_str(),
+                )
+                .scope("node-config")
+                .send();
+        }
+
         for (field, name) in entries {
             if name.is_empty() {
                 return Err(ChannelNamesError::Empty(field));
@@ -144,7 +171,7 @@ pub struct P2pConfig {
 
 impl Default for P2pConfig {
     fn default() -> Self {
-        P2pConfig {
+        let config = P2pConfig {
             listen_addr: Multiaddr::empty(),
             persistent_peers: vec![],
             persistent_peers_only: false,
@@ -154,7 +181,40 @@ impl Default for P2pConfig {
             pubsub_max_size: ByteSize::mib(4),
             protocol_names: Default::default(),
             channel_names: Default::default(),
+        };
+
+        if quint_oracle::enabled() {
+            // The spec models the message-size limits in MiB, the unit the
+            // defaults are written in.
+            let pubsub_mib = (config.pubsub_max_size.as_u64() / (1024 * 1024)) as i64;
+            let rpc_mib = (config.rpc_max_size.as_u64() / (1024 * 1024)) as i64;
+            quint_oracle::Event::builder(quint_oracle::current_test(), "P2pConfigdefault")
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("pubsub_max_size"),
+                    ],
+                    pubsub_mib,
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("rpc_max_size"),
+                    ],
+                    rpc_mib,
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("persistent_peers_only"),
+                    ],
+                    config.persistent_peers_only,
+                )
+                .scope("node-config")
+                .send();
         }
+
+        config
     }
 }
 
@@ -218,7 +278,7 @@ pub struct DiscoveryConfig {
 
 impl Default for DiscoveryConfig {
     fn default() -> Self {
-        DiscoveryConfig {
+        let config = DiscoveryConfig {
             enabled: false,
             bootstrap_protocol: Default::default(),
             selector: Default::default(),
@@ -232,7 +292,42 @@ impl Default for DiscoveryConfig {
             request_max_retries: discovery::default_request_max_retries(),
             connect_request_max_retries: discovery::default_connect_request_max_retries(),
             max_peers_per_response: discovery::default_max_peers_per_response(),
+        };
+
+        if quint_oracle::enabled() {
+            use quint_oracle::ToLogged as _;
+            quint_oracle::Event::builder(quint_oracle::current_test(), "DiscoveryConfigset")
+                .argument(
+                    "discovery",
+                    quint_oracle::record([
+                        ("enabled", config.enabled.to_logged()),
+                        ("num_outbound_peers", config.num_outbound_peers.to_logged()),
+                        ("num_inbound_peers", config.num_inbound_peers.to_logged()),
+                        (
+                            "max_connections_per_ip",
+                            config.max_connections_per_ip.to_logged(),
+                        ),
+                        (
+                            "max_peers_per_response",
+                            config.max_peers_per_response.to_logged(),
+                        ),
+                        ("dial_max_retries", config.dial_max_retries.to_logged()),
+                    ]),
+                    Some("DISCOVERY_SETS"),
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("discovery"),
+                        quint_oracle::PathSeg::ident("max_connections_per_ip"),
+                    ],
+                    config.max_connections_per_ip as i64,
+                )
+                .scope("node-config")
+                .send();
         }
+
+        config
     }
 }
 
@@ -445,7 +540,62 @@ impl GossipSubConfig {
             enable_flood_publish,
         };
 
+        let raw = result;
+
         result.adjust();
+
+        if quint_oracle::enabled() {
+            use quint_oracle::ToLogged as _;
+            quint_oracle::Event::builder(quint_oracle::current_test(), "GossipSubConfignew")
+                .argument(
+                    "raw",
+                    quint_oracle::record([
+                        ("mesh_n", raw.mesh_n.to_logged()),
+                        ("mesh_n_high", raw.mesh_n_high.to_logged()),
+                        ("mesh_n_low", raw.mesh_n_low.to_logged()),
+                        ("mesh_outbound_min", raw.mesh_outbound_min.to_logged()),
+                        ("peer_scoring", raw.enable_peer_scoring.to_logged()),
+                        ("explicit_peering", raw.enable_explicit_peering.to_logged()),
+                        ("flood_publish", raw.enable_flood_publish.to_logged()),
+                    ]),
+                    Some("MESH_RAWS"),
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("gossip"),
+                        quint_oracle::PathSeg::ident("mesh_n"),
+                    ],
+                    result.mesh_n as i64,
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("gossip"),
+                        quint_oracle::PathSeg::ident("mesh_n_high"),
+                    ],
+                    result.mesh_n_high as i64,
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("gossip"),
+                        quint_oracle::PathSeg::ident("mesh_n_low"),
+                    ],
+                    result.mesh_n_low as i64,
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("gossip"),
+                        quint_oracle::PathSeg::ident("mesh_outbound_min"),
+                    ],
+                    result.mesh_outbound_min as i64,
+                )
+                .scope("node-config")
+                .send();
+        }
+
         result
     }
 
@@ -1033,6 +1183,33 @@ mod tests {
         let config: DiscoveryConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.max_connections_per_ip, 5);
         assert!(config.max_connections_per_ip < config.num_inbound_peers);
+    }
+
+    /// reproduces obs:adjust_reached_zero_mesh_n_low — fails on current code.
+    ///
+    /// A TOML gossipsub section with `mesh_n = 1` (and the other mesh fields
+    /// omitted, so serde fills zeros) makes `adjust()` recompute
+    /// `mesh_n_low = 1 * 2 / 3 = 0` and then evaluate `mesh_n_low - 1` on a
+    /// `usize`. The model's `mesh_adjust_never_underflows` forbids reaching
+    /// that subtraction with `mesh_n_low == 0`.
+    #[test]
+    #[ignore]
+    fn gossipsub_config_mesh_n_one_does_not_underflow() {
+        let toml = r#"
+            type = "gossipsub"
+            mesh_n = 1
+        "#;
+
+        let protocol: PubSubProtocol = toml::from_str(toml).unwrap();
+        let PubSubProtocol::GossipSub(config) = protocol else {
+            panic!("expected a gossipsub protocol");
+        };
+
+        // The documented invariant of `mesh_outbound_min`: at least 1, at most
+        // `mesh_n / 2`, and strictly below `mesh_n_low`.
+        assert!(config.mesh_outbound_min() >= 1);
+        assert!(config.mesh_outbound_min() <= config.mesh_n() / 2);
+        assert!(config.mesh_outbound_min() < config.mesh_n_low());
     }
 
     #[test]

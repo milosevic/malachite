@@ -326,6 +326,85 @@ Studio finding; that needs the owner. Statuses below are mine, not Studio's.
   quietly assumed. That is the right call and it is the one part of the fast state machine
   with no counterpart in the paper's structure.
 
+## F-22 — Independent reviewer: four definite bugs the model and the tests both missed
+
+- **Anchor found at:** `99c8468c`; **fixed in:** `0a5c9e2` (see git log for the exact hash)
+- **Found by:** an independent adversarial reviewer subagent, given the verbatim Algorithm 1
+  transcription as ground truth and barred from reading the implementation's own tests as
+  authority. None of these duplicate F-01..F-21.
+
+### F-22a — A node could vote TWICE in one round (self-equivocation) — SEVERE
+`fast/state_machine.rs`, the `NewRound` arm. It matched `(_, Input::NewRound(round)) if
+state.round <= round`, so a `NewRound` for the round already in progress ran `start_round`
+and reset the step from `Precommit` back to `Propose`. A second proposal then drew a
+**second vote for the same round**. The classic machine guards this with
+`(Step::Unstarted, Input::NewRound(round))`; the fast one had dropped the step guard.
+Algorithm 1 only ever calls `StartRound(round+1)`, so same-round re-entry never occurs in
+the protocol. **Fixed:** the `Unstarted` arm handles entry, and every other step requires
+`state.round < round`. This is the severe half of F-20, which recorded only the timeout
+symptom.
+
+### F-22b — `set_valid` used `<` where L29-L30 uses `≤`, so a node voted for values the paper forbids
+`fast/state.rs::set_valid` is monotone and no-ops at equality, but L29-L30 reads
+`if valid_p.round ≤ vr then valid_p ← (vr, id(v))`. The `≤` is deliberate: when `n > 5f`,
+two `2f+1` quorums need **not** intersect — `2(2f+1) - (5f+1) = 1-f ≤ 0` — so two different
+values can each hold a quorum in the same round, and the rule replaces the *value* while
+keeping the round. Because the code no-oped, `valid.value` went stale, and a later fresh
+proposal for the stale value passed the L21 binding check that should have rejected it.
+**Fixed:** the L27 arm writes `(vr, value_id)` directly when `valid_round() <= vr`;
+`set_valid` keeps its strict `<` for the L36/L47 callers.
+
+### F-22c — The L39 precommit timeout could never be armed for a later round — LIVENESS
+The arm used the single per-round `check_timeout(Precommit)` bit, but L39 arms the timeout
+for the **quorum's** round `r`, which may be above the round we are at. A `QuorumAny(0)`
+consumed the only slot, so `QuorumAny(1)` returned invalid and round 1's timeout was never
+armed — and the keeper had already latched its own quorum-any for that round, so it would
+never re-emit. The node sits in round 1 with no timeout. **Fixed:** `State` now carries
+`armed_precommit_rounds: BTreeSet<Round>` and latches per `r`, matching L39's "for the
+first time with `r >= round_p`".
+
+### F-22d — L47-L48 was unimplementable; every `WaitForValid` burned its full timeout
+`Input::VoteQuorumForValue` was gated on `this_round`. A proposer inside `WaitForValid` is
+at `round_p` waiting to learn `valid` from `round_p - 1` (L46), so the quorum that should
+end the wait had no accepting arm and was dropped. **Fixed:** the input now carries the
+round — `VoteQuorumForValue(Round, ValueId)` — and is accepted for any round above
+`valid_p.round`, which covers L36 and L47 together.
+
+### F-22e — The vote keeper tallied prevotes
+`fast/keeper.rs::apply_vote` accepted any `SignedVote`. This protocol has one voting step;
+a prevote is not part of it. A prevote for `v` landed in the same weight bucket as a
+precommit for `v` and counted toward `2f+1`/`n-f`, and a validator's prevote followed by a
+precommit was misrecorded as equivocation. **Fixed:** non-precommit votes are discarded.
+
+### Still open from the same review
+- **Every `State` field is `pub`**, so the `with_step` / `set_decision` guards added in
+  `99c8468c` are advisory — a caller can write `s.decision = None` directly. Same class as
+  F-18. The tests themselves write fields directly, so closing this needs a test refactor.
+- **`WaitForValid` and the L39 timeout emit the identical `Timeout{round, Precommit}`**, so
+  a caller cannot tell which input to feed back — the conflation `input.rs` claims to
+  avoid. Needs its own `TimeoutKind` or tag.
+- **`ProposeValue` is accepted while `valid` is `Some`**, which would broadcast a fresh
+  proposal where L14-L15 requires a re-proposal. Reviewer marked this a QUESTION, since it
+  may be unreachable in the intended orchestrator.
+- **Nothing checks the validator set can support the protocol.** `FastVoteKeeper::new`
+  accepts a set where one validator holds 50% of the power, for which `f < n/5` is
+  impossible.
+
+### Confirmed correct by the same review
+The threshold arithmetic. `is_met` is strict (`weight * denom > total * num`), so equality
+is not met; `> 4n/5` equals `n - f` for every `n` with `f = floor((n-1)/5)`, checked for
+n = 5..12, so `decision` is right on non-`5f+1` sets too. One undocumented consequence:
+`quorum` at `> 2n/5` is **stricter** than `2f+1` when `n != 5f+1` (n=10, f=1 needs 5, not
+3) — conservative and therefore safe, but a liveness cost nobody had written down.
+
+## F-23 — Studio offers test generation on an accepted finding
+
+Recording a `set_finding` verdict of `accepted` makes Studio start generating a regression
+test for it. Both verdicts recorded so far returned "decision recorded, but test generation
+could not start: another workflow already owns component 'fast-round-state-machine'" —
+a re-sync was in flight. Sequence finding decisions and pipeline work so the generated
+tests actually land.
+
 ---
 
 ## Open verification gaps (not findings, but worth tracking)

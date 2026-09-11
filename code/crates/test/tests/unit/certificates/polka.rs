@@ -34,6 +34,7 @@ impl CertificateBuilder for Polka {
 
 /// Tests the verification of a valid PolkaCertificate with signatures from validators
 /// representing more than 2/3 of the total voting power.
+#[quint_oracle::test]
 #[test]
 fn valid_polka_certificate_with_sufficient_voting_power() {
     CertificateTest::<Polka>::new()
@@ -49,6 +50,7 @@ fn valid_polka_certificate_with_sufficient_voting_power() {
 
 /// Tests the verification of a certificate with signatures from validators
 /// representing exactly the threshold amount of voting power.
+#[quint_oracle::test]
 #[test]
 fn valid_polka_certificate_with_exact_threshold_voting_power() {
     CertificateTest::<Polka>::new()
@@ -63,6 +65,7 @@ fn valid_polka_certificate_with_exact_threshold_voting_power() {
 }
 
 /// Tests the verification of a certificate with valid signatures but insufficient voting power.
+#[quint_oracle::test]
 #[test]
 fn invalid_polka_certificate_insufficient_voting_power() {
     CertificateTest::<Polka>::new()
@@ -96,6 +99,7 @@ fn invalid_polka_certificate_insufficient_voting_power() {
         });
 }
 
+#[quint_oracle::test]
 #[test]
 fn invalid_polka_certificate_signed_voting_power_overflow() {
     let (validators, signers) = make_validators([u64::MAX, 1], DEFAULT_SEED);
@@ -138,6 +142,7 @@ fn invalid_polka_certificate_signed_voting_power_overflow() {
 }
 
 /// Tests the verification of a certificate containing multiple votes from the same validator.
+#[quint_oracle::test]
 #[test]
 fn invalid_polka_certificate_duplicate_validator_vote() {
     let validator_addr = {
@@ -153,6 +158,7 @@ fn invalid_polka_certificate_duplicate_validator_vote() {
 }
 
 /// Tests the verification of a certificate containing a vote from a validator not in the validator set.
+#[quint_oracle::test]
 #[test]
 fn invalid_polka_certificate_unknown_validator() {
     // Define the seed for generating the other validator twice
@@ -174,6 +180,7 @@ fn invalid_polka_certificate_unknown_validator() {
 ///
 /// A single bad signature rejects the whole certificate, even if the remaining
 /// valid signatures still meet the 2/3 threshold.
+#[quint_oracle::test]
 #[test]
 fn invalid_polka_certificate_invalid_signature() {
     CertificateTest::<Polka>::new()
@@ -189,6 +196,7 @@ fn invalid_polka_certificate_invalid_signature() {
 /// the certificate's, so the wrong-height/round vote never reaches the verifier and
 /// the failure surfaces as `NotEnoughVotingPower` from the threshold check rather
 /// than as `InvalidPolkaSignature`.
+#[quint_oracle::test]
 #[test]
 fn invalid_polka_certificate_wrong_vote_height_round() {
     CertificateTest::<Polka>::new()
@@ -213,6 +221,7 @@ fn invalid_polka_certificate_wrong_vote_height_round() {
 }
 
 /// Tests the verification of a certificate with no votes.
+#[quint_oracle::test]
 #[test]
 fn empty_polka_certificate() {
     CertificateTest::<Polka>::new()
@@ -229,6 +238,7 @@ fn empty_polka_certificate() {
 ///
 /// Both scenarios below must be rejected with `InvalidPolkaSignature`, even when
 /// the valid subset of signatures still meets the 2/3 voting-power threshold.
+#[quint_oracle::test]
 #[test]
 fn polka_certificate_with_mixed_valid_and_invalid_votes() {
     // Valid signatures from validators 2..4 (VP=70) would meet quorum on their own,
@@ -256,6 +266,7 @@ fn polka_certificate_with_mixed_valid_and_invalid_votes() {
 /// Address spoofing attack: a spoofed signature claims to be from a high-VP validator
 /// but was actually signed by a different validator's key. The certificate is rejected
 /// on the spoofed entry.
+#[quint_oracle::test]
 #[test]
 fn polka_certificate_address_spoofing_attack() {
     CertificateTest::<Polka>::new()
@@ -270,6 +281,7 @@ fn polka_certificate_address_spoofing_attack() {
 /// `height = 1` but the verifier reconstructs the prevote using the certificate's
 /// own `height = 2`, so verification fails on every entry and the certificate is
 /// rejected on the first invalid signature.
+#[quint_oracle::test]
 #[test]
 fn polka_certificate_signature_replay_across_heights() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -319,6 +331,7 @@ fn polka_certificate_signature_replay_across_heights() {
 /// `round = 0` but the verifier reconstructs the prevote using the certificate's
 /// own `round = 1`, so verification fails on every entry and the certificate is
 /// rejected on the first invalid signature.
+#[quint_oracle::test]
 #[test]
 fn polka_certificate_signature_replay_across_rounds() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -368,6 +381,7 @@ fn polka_certificate_signature_replay_across_rounds() {
 /// signatures are bytewise valid for value 42 but the verifier reconstructs the
 /// prevote using the certificate's own `value_id = 99`, so verification fails on
 /// every entry and the certificate is rejected on the first invalid signature.
+#[quint_oracle::test]
 #[test]
 fn polka_certificate_signature_replay_across_values() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -416,6 +430,7 @@ fn polka_certificate_signature_replay_across_values() {
 /// verifier always reconstructs polka entries as *prevotes*, so the precommit
 /// signatures fail verification and the certificate is rejected on the first
 /// invalid signature.
+#[quint_oracle::test]
 #[test]
 fn polka_certificate_cross_type_replay_from_precommit() {
     let (validators, signers) = make_validators([25, 25, 25, 25], DEFAULT_SEED);
@@ -463,6 +478,7 @@ fn polka_certificate_cross_type_replay_from_precommit() {
 
 /// Validator set mismatch: signatures from validator set A are verified
 /// against validator set B. All addresses are unknown.
+#[quint_oracle::test]
 #[test]
 fn polka_certificate_validator_set_mismatch() {
     let (validators_a, signers_a) = make_validators([25, 25, 25, 25], 0xAAAA);
@@ -498,6 +514,7 @@ fn polka_certificate_validator_set_mismatch() {
 
 /// Quorum boundary: exactly 2/3 is NOT sufficient (strict >).
 /// With validators [1, 1, 1] and 2 of 3 signing: 2*3=6 > 3*2=6 is false.
+#[quint_oracle::test]
 #[test]
 fn polka_certificate_quorum_boundary_exact_two_thirds_insufficient() {
     CertificateTest::<Polka>::new()
@@ -512,6 +529,7 @@ fn polka_certificate_quorum_boundary_exact_two_thirds_insufficient() {
 
 /// Quorum boundary: just above 2/3 is sufficient.
 /// With validators [34, 33, 33], signing [0, 1] (VP=67): 67*3=201 > 100*2=200.
+#[quint_oracle::test]
 #[test]
 fn polka_certificate_quorum_boundary_just_above_two_thirds_sufficient() {
     CertificateTest::<Polka>::new()

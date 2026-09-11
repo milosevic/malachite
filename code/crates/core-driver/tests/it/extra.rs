@@ -5361,3 +5361,207 @@ fn driver_stale_new_round_neither_rewinds_nor_rearms_the_propose_timeout() {
         "the propose timeout for round 0 must not be armed a second time: {outputs:?}"
     );
 }
+
+// reproduces round_state_never_default — fails on current code
+//
+// `Driver::process(Input::NewRound(h, Round::Nil, proposer))` is taken at face
+// value. `apply_new_round` sees `self.height() == height` and `round < round_state.round`
+// false (Nil < Nil), so it assigns `round_state.round = Round::Nil` — the "no round
+// yet" sentinel — and hands `RoundInput::NewRound(Round::Nil)` to the state machine.
+// There the L11/L20 arm matches (`round >= state.round`), the step moves to
+// `Propose` and the propose timeout is armed. The result is a round state that is
+// *started* at no round at all: step `Propose`, round `Nil`, a timeout scheduled
+// for round `Nil`. If we were the proposer, the same path would emit a proposal
+// for round `Nil`.
+//
+// The spec's `round_state_never_default` states the contract: a round state is
+// either `Unstarted`, or it is at a real round (>= 0).
+//
+// Reach: core-consensus never sends this — `start_height` passes `Round::new(0)`
+// and `process_driver_output` lifts a round from a `NewRound` output, always >= 0.
+// So the reproduction drives the driver's own public `process` API, which places
+// no precondition on the round and validates its other inputs (wrong height,
+// unknown validator, stale `NewRound`) with typed errors or a silent drop.
+#[test]
+#[ignore]
+fn new_round_at_nil_round_must_not_start_the_round() {
+    let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3.clone(), v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    // A `NewRound` naming `Round::Nil` — the sentinel the driver itself starts at.
+    let result = driver.process(Input::NewRound(height, Round::Nil, v1.address));
+
+    // Either the driver rejects it, or the round state must stay Unstarted:
+    // it must never be started at a nil round.
+    if result.is_ok() {
+        assert!(
+            driver.round_state().step == Step::Unstarted || !driver.round().is_nil(),
+            "round state started at a nil round: step {:?}, round {}, outputs {:?}",
+            driver.round_state().step,
+            driver.round(),
+            result.unwrap()
+        );
+    }
+}
+
+// Pins `decision_is_never_overwritten` for the ROUND of the decision: once we have decided a
+// value, a later decision for the SAME value in a DIFFERENT round must not re-write the round
+// we recorded, because that round is what attributes the block to the round it was proposed in.
+//
+// The model's counterexample decides `v` at round 3 and then rewrites `state.decision` to
+// `v @ round 0` through the raw `State::set_decision` builder — a call site nothing but
+// `commit()` has in production. The realistic public path with the same shape is a late sync
+// delivery: we decide `v` from a round-0 commit certificate, and then a certificate plus a
+// `SyncDecision` for the very same value at round 1 arrives from the Sync protocol (a peer that
+// collected its quorum in a different round). Everything goes through the driver's public
+// `process` under default settings.
+//
+// This test PASSES: `Step::Commit` is terminal in the transition table, so the second decision
+// is rejected before it reaches `commit()`. The model is looser than the code — its `set_decision`
+// builder has no such guard.
+#[test]
+fn driver_decision_round_is_not_rewritten_by_a_later_sync_decision() {
+    let value_v = Value::new(9999);
+
+    let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    driver
+        .process(new_round_input(Round::new(0), v1.address))
+        .expect("start round 0");
+
+    driver
+        .process(proposal_input(
+            Round::new(0),
+            value_v.clone(),
+            Round::Nil,
+            Validity::Valid,
+            v1.address,
+        ))
+        .expect("receive v1's proposal for v in round 0");
+
+    driver
+        .process(commit_certificate_input_at(
+            Round::new(0),
+            value_v.clone(),
+            &[v1.address, v2.address],
+        ))
+        .expect("decide v in round 0");
+
+    assert_eq!(
+        driver.decided_value(),
+        Some((Round::new(0), value_v.clone())),
+        "we should have decided v in round 0"
+    );
+
+    // The Sync protocol now delivers the same value, but decided in round 1: first the
+    // certificate, then the synthetic proposal that turns into a SyncDecision input.
+    let _ = driver.process(commit_certificate_input_at(
+        Round::new(1),
+        value_v.clone(),
+        &[v1.address, v2.address],
+    ));
+
+    let synthetic_proposal = Proposal::new(
+        Height::new(1),
+        Round::new(1),
+        value_v.clone(),
+        Round::Nil,
+        v2.address,
+    );
+
+    let _ = driver.process(Input::SyncDecision(synthetic_proposal));
+
+    assert_eq!(
+        driver.decided_value(),
+        Some((Round::new(0), value_v)),
+        "the decision's round must stay the round we actually decided in"
+    );
+}
+
+// Pins `round_never_moves_backwards` for the round-skip path: after two precommit timeouts have
+// carried us forward, a stale input for a round we have already played must not rewind us into it.
+//
+// The model's counterexample climbs to round 4 (twice through L67's precommit-timeout round skip)
+// and then rewinds to round 1 with the raw `State::update_round` mutator, which compares nothing.
+// No client has that call: `update_round` is reached only from a round skip, which always moves to
+// a strictly higher round, and from the two `Step::Unstarted + NewRound` arms. So this drives the
+// realistic shape instead — after skipping to round 2, the three late inputs a slow network can
+// still deliver for round 0 arrive: a precommit timeout, a round-start, and a prevote.
+//
+// This test PASSES: the transition table's `this_round` guards and the driver's stale-`NewRound`
+// check reject all three, so the round never rewinds. The model is looser than the code.
+#[test]
+fn driver_stale_inputs_do_not_rewind_the_round_after_precommit_timeout_skips() {
+    let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3, v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    // Round 0: we are not the proposer, so we arm the propose timeout.
+    driver
+        .process(new_round_input(Round::new(0), v1.address))
+        .expect("start round 0");
+
+    // The precommit timeout for round 0 elapses: L67 skips us to round 1.
+    let outputs = driver
+        .process(timeout_precommit_input(Round::new(0)))
+        .expect("precommit timeout in round 0");
+    assert_eq!(outputs, vec![new_round_output(Round::new(1))]);
+
+    driver
+        .process(new_round_input(Round::new(1), v2.address))
+        .expect("start round 1");
+
+    // And again in round 1: we reach round 2.
+    let outputs = driver
+        .process(timeout_precommit_input(Round::new(1)))
+        .expect("precommit timeout in round 1");
+    assert_eq!(outputs, vec![new_round_output(Round::new(2))]);
+
+    driver
+        .process(new_round_input(Round::new(2), v3.address))
+        .expect("start round 2");
+    assert_eq!(driver.round(), Round::new(2));
+
+    // Late deliveries for round 0, in the order a slow link would hand them over.
+    let stale_precommit_timeout = driver
+        .process(timeout_precommit_input(Round::new(0)))
+        .expect("a stale precommit timeout is not an error");
+    assert!(
+        stale_precommit_timeout.is_empty(),
+        "a precommit timeout for a round we left must produce no output: {stale_precommit_timeout:?}"
+    );
+
+    let stale_new_round = driver
+        .process(new_round_input(Round::new(0), v1.address))
+        .expect("a stale new round is not an error");
+    assert!(
+        stale_new_round.is_empty(),
+        "a round-start for a round we left must produce no output: {stale_new_round:?}"
+    );
+
+    let _ = driver.process(prevote_nil_input(&v1.address));
+
+    assert_eq!(
+        driver.round(),
+        Round::new(2),
+        "no stale input may rewind the round"
+    );
+}

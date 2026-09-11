@@ -8,6 +8,7 @@ mod genesis;
 mod height;
 mod proposal;
 mod proposal_part;
+mod quint_signing_ids;
 mod signing;
 mod validator_set;
 mod value;

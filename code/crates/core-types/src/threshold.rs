@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use crate::VotingPower;
 
 /// Represents the different quorum thresholds.
@@ -64,26 +66,143 @@ impl ThresholdParam {
         }
     }
 
+    /// Quint oracle: the param this call runs against. `ThresholdParam::new` is a
+    /// `const fn` and the two shipped values are `const`s, so there is no
+    /// constructor to instrument — `self` here IS the installed param, and the
+    /// spec's `ThresholdParamnew` records it as the state the call sees.
+    fn log_param_install(&self) {
+        quint_oracle::Event::builder(quint_oracle::current_test(), "ThresholdParamnew")
+            .argument("numerator", self.numerator, Some("PARAM_NUMERATORS"))
+            .argument("denominator", self.denominator, Some("PARAM_DENOMINATORS"))
+            .assert(
+                Vec::from([
+                    quint_oracle::PathSeg::ident("state"),
+                    quint_oracle::PathSeg::ident("threshold"),
+                    quint_oracle::PathSeg::ident("denominator"),
+                ]),
+                self.denominator,
+            )
+            .scope("core-types-domain")
+            .send();
+    }
+
     /// Check whether the threshold is met.
     pub fn is_met(&self, weight: VotingPower, total: VotingPower) -> bool {
-        let lhs = weight
-            .checked_mul(self.denominator)
-            .expect("attempt to multiply with overflow");
+        // Both products are computed up front so the oracle can report the
+        // overflow arm before the `expect` below aborts the call. `checked_mul`
+        // has no side effects, so evaluating it early changes nothing; the
+        // panic order and message are unchanged.
+        let lhs_checked = weight.checked_mul(self.denominator);
+        let rhs_checked = total.checked_mul(self.numerator);
 
-        let rhs = total
-            .checked_mul(self.numerator)
-            .expect("attempt to multiply with overflow");
+        if quint_oracle::enabled() {
+            self.log_param_install();
 
-        lhs > rhs
+            if lhs_checked.is_none() || rhs_checked.is_none() {
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "ThresholdParamis_met_overflow_panics",
+                )
+                .argument("weight", weight, Some("ARITH_NUMBERS"))
+                .argument("total", total, Some("ARITH_NUMBERS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("panic_threshold_overflow"),
+                    ]),
+                    true,
+                )
+                .scope("core-types-domain")
+                .send();
+            }
+        }
+
+        let lhs = lhs_checked.expect("attempt to multiply with overflow");
+        let rhs = rhs_checked.expect("attempt to multiply with overflow");
+
+        let is_met = lhs > rhs;
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "ThresholdParamis_met")
+                .argument("weight", weight, Some("ARITH_NUMBERS"))
+                .argument("total", total, Some("ARITH_NUMBERS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("last_is_met_code"),
+                    ]),
+                    if is_met { 1i64 } else { 0i64 },
+                )
+                .scope("core-types-domain")
+                .send();
+        }
+
+        is_met
     }
 
     /// Return the minimum expected weight to meet the threshold when applied to the given total.
     pub fn min_expected(&self, total: VotingPower) -> VotingPower {
-        1 + total
-            .checked_mul(self.numerator)
+        // Same shape as `is_met`: compute the checked steps first so the panic
+        // arm can be reported before the `expect` aborts.
+        let product = total.checked_mul(self.numerator);
+        let quotient = product.and_then(|p| p.checked_div(self.denominator));
+
+        if quint_oracle::enabled() {
+            self.log_param_install();
+
+            if quotient.is_none() {
+                let event = quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "ThresholdParammin_expected_panics",
+                )
+                .argument("total", total, Some("ARITH_NUMBERS"));
+
+                // The spec latches whichever of the two `expect`s this call hits.
+                let event = if self.denominator == 0 {
+                    event.assert(
+                        Vec::from([
+                            quint_oracle::PathSeg::ident("state"),
+                            quint_oracle::PathSeg::ident("panic_min_expected_div0"),
+                        ]),
+                        true,
+                    )
+                } else {
+                    event.assert(
+                        Vec::from([
+                            quint_oracle::PathSeg::ident("state"),
+                            quint_oracle::PathSeg::ident("panic_threshold_overflow"),
+                        ]),
+                        true,
+                    )
+                };
+
+                event.scope("core-types-domain").send();
+            }
+        }
+
+        let min_expected = 1 + product
             .expect("attempt to multiply with overflow")
             .checked_div(self.denominator)
-            .expect("attempt to divide with overflow")
+            .expect("attempt to divide with overflow");
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "ThresholdParammin_expected",
+            )
+            .argument("total", total, Some("ARITH_NUMBERS"))
+            .assert(
+                Vec::from([
+                    quint_oracle::PathSeg::ident("state"),
+                    quint_oracle::PathSeg::ident("last_min_expected_value"),
+                ]),
+                min_expected,
+            )
+            .scope("core-types-domain")
+            .send();
+        }
+
+        min_expected
     }
 }
 

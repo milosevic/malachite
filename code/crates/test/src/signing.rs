@@ -53,6 +53,8 @@ fn vote_extension_sign_bytes(
 
 pub use malachitebft_signing_ed25519::*;
 
+use crate::quint_signing_ids as qids;
+
 pub trait Hashable {
     type Output;
     fn hash(&self) -> Self::Output;
@@ -88,9 +90,34 @@ impl Verifier<TestContext> for Ed25519Verifier {
         signature: &Signature,
         public_key: &PublicKey,
     ) -> Result<VerificationResult, Error> {
-        Ok(VerificationResult::from_bool(
-            public_key.verify(&vote.to_sign_bytes(), signature).is_ok(),
-        ))
+        let valid = public_key.verify(&vote.to_sign_bytes(), signature).is_ok();
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "verify_signed_vote")
+                .argument("vote", qids::vote_fields(vote), Some("VOTE_FIELDS"))
+                .argument(
+                    "sig_signer",
+                    qids::signature_signer(signature),
+                    Some("KEYS"),
+                )
+                .argument(
+                    "sig_covers",
+                    qids::signature_covers(signature, &qids::vote_preimage(vote)),
+                    None,
+                )
+                .argument("key", qids::key(public_key), Some("KEYS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("w"),
+                        quint_oracle::PathSeg::ident("calls"),
+                    ]),
+                    qids::next_call(),
+                )
+                .scope("signing")
+                .send();
+        }
+
+        Ok(VerificationResult::from_bool(valid))
     }
 
     async fn verify_signed_proposal(
@@ -99,11 +126,40 @@ impl Verifier<TestContext> for Ed25519Verifier {
         signature: &Signature,
         public_key: &PublicKey,
     ) -> Result<VerificationResult, Error> {
-        Ok(VerificationResult::from_bool(
-            public_key
-                .verify(&proposal.to_sign_bytes(), signature)
-                .is_ok(),
-        ))
+        let valid = public_key
+            .verify(&proposal.to_sign_bytes(), signature)
+            .is_ok();
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "verify_signed_proposal")
+                .argument(
+                    "proposal",
+                    qids::proposal_fields(proposal),
+                    Some("PROPOSAL_FIELDS"),
+                )
+                .argument(
+                    "sig_signer",
+                    qids::signature_signer(signature),
+                    Some("KEYS"),
+                )
+                .argument(
+                    "sig_covers",
+                    qids::signature_covers(signature, &qids::proposal_preimage(proposal)),
+                    None,
+                )
+                .argument("key", qids::key(public_key), Some("KEYS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("w"),
+                        quint_oracle::PathSeg::ident("calls"),
+                    ]),
+                    qids::next_call(),
+                )
+                .scope("signing")
+                .send();
+        }
+
+        Ok(VerificationResult::from_bool(valid))
     }
 
     async fn verify_signed_vote_extension(
@@ -114,15 +170,72 @@ impl Verifier<TestContext> for Ed25519Verifier {
         public_key: &PublicKey,
     ) -> Result<VerificationResult, Error> {
         let preimage = vote_extension_sign_bytes(scope, extension);
-        Ok(VerificationResult::from_bool(
-            public_key.verify(&preimage, signature).is_ok(),
-        ))
+        let valid = public_key.verify(&preimage, signature).is_ok();
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "verify_signed_vote_extension",
+            )
+            .argument("scope", qids::scope_fields(scope), Some("SCOPES"))
+            .argument("ext", qids::extension(extension), Some("EXTS"))
+            .argument(
+                "sig_signer",
+                qids::signature_signer(signature),
+                Some("KEYS"),
+            )
+            .argument(
+                "sig_covers",
+                qids::signature_covers(signature, &qids::extension_preimage(scope, extension)),
+                None,
+            )
+            .argument("key", qids::key(public_key), Some("KEYS"))
+            .assert(
+                Vec::from([
+                    quint_oracle::PathSeg::ident("w"),
+                    quint_oracle::PathSeg::ident("calls"),
+                ]),
+                qids::next_call(),
+            )
+            .scope("signing")
+            .send();
+        }
+
+        Ok(VerificationResult::from_bool(valid))
     }
 
     async fn verify_validator_proof(
         &self,
         proof: &ValidatorProof<TestContext>,
     ) -> Result<VerificationResult, Error> {
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "verify_validator_proof")
+                .argument("pk_bytes", qids::key_bytes(&proof.public_key), None)
+                .argument("peer_id", qids::peer(&proof.peer_id), Some("PEERS"))
+                .argument(
+                    "sig_signer",
+                    qids::signature_signer(&proof.signature),
+                    Some("KEYS"),
+                )
+                .argument(
+                    "sig_covers",
+                    qids::signature_covers(
+                        &proof.signature,
+                        &qids::pov_preimage(&proof.public_key, &proof.peer_id),
+                    ),
+                    None,
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("w"),
+                        quint_oracle::PathSeg::ident("calls"),
+                    ]),
+                    qids::next_call(),
+                )
+                .scope("signing")
+                .send();
+        }
+
         let public_key = proof.decoded_public_key().map_err(|e| {
             Error::from_source(format!("Invalid public key in validator proof: {e}"))
         })?;
@@ -207,6 +320,25 @@ impl Verifier<TestContext> for Ed25519Signer {
 impl Signer<TestContext> for Ed25519Signer {
     async fn sign_vote(&self, vote: Vote) -> Result<SignedVote<TestContext>, Error> {
         let signature = self.sign(&vote.to_sign_bytes());
+
+        if quint_oracle::enabled() {
+            let key = qids::key(&self.private_key.public_key());
+            qids::remember_signature(&signature, key, qids::vote_preimage(&vote));
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "sign_vote")
+                .argument("key", key, Some("KEYS"))
+                .argument("vote", qids::vote_fields(&vote), Some("VOTE_FIELDS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("w"),
+                        quint_oracle::PathSeg::ident("signings"),
+                    ]),
+                    qids::next_signing(),
+                )
+                .scope("signing")
+                .send();
+        }
+
         Ok(SignedVote::new(vote, signature))
     }
 
@@ -215,6 +347,29 @@ impl Signer<TestContext> for Ed25519Signer {
         proposal: Proposal,
     ) -> Result<SignedProposal<TestContext>, Error> {
         let signature = self.private_key.sign(&proposal.to_sign_bytes());
+
+        if quint_oracle::enabled() {
+            let key = qids::key(&self.private_key.public_key());
+            qids::remember_signature(&signature, key, qids::proposal_preimage(&proposal));
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "sign_proposal")
+                .argument("key", key, Some("KEYS"))
+                .argument(
+                    "proposal",
+                    qids::proposal_fields(&proposal),
+                    Some("PROPOSAL_FIELDS"),
+                )
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("w"),
+                        quint_oracle::PathSeg::ident("signings"),
+                    ]),
+                    qids::next_signing(),
+                )
+                .scope("signing")
+                .send();
+        }
+
         Ok(SignedProposal::new(proposal, signature))
     }
 
@@ -225,6 +380,30 @@ impl Signer<TestContext> for Ed25519Signer {
     ) -> Result<SignedExtension<TestContext>, Error> {
         let preimage = vote_extension_sign_bytes(&scope, &extension);
         let signature = self.private_key.sign(&preimage);
+
+        if quint_oracle::enabled() {
+            let key = qids::key(&self.private_key.public_key());
+            qids::remember_signature(
+                &signature,
+                key,
+                qids::extension_preimage(&scope, &extension),
+            );
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "sign_vote_extension")
+                .argument("key", key, Some("KEYS"))
+                .argument("scope", qids::scope_fields(&scope), Some("SCOPES"))
+                .argument("ext", qids::extension(&extension), Some("EXTS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("w"),
+                        quint_oracle::PathSeg::ident("signings"),
+                    ]),
+                    qids::next_signing(),
+                )
+                .scope("signing")
+                .send();
+        }
+
         Ok(SignedMessage::new(extension, signature))
     }
 
@@ -235,6 +414,26 @@ impl Signer<TestContext> for Ed25519Signer {
     ) -> Result<ValidatorProof<TestContext>, Error> {
         let preimage = ValidatorProof::<TestContext>::signing_bytes(&public_key, &peer_id);
         let signature = self.private_key.sign(&preimage);
+
+        if quint_oracle::enabled() {
+            let key = qids::key(&self.private_key.public_key());
+            qids::remember_signature(&signature, key, qids::pov_preimage(&public_key, &peer_id));
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "sign_validator_proof")
+                .argument("key", key, Some("KEYS"))
+                .argument("pk_bytes", qids::key_bytes(&public_key), None)
+                .argument("peer_id", qids::peer(&peer_id), Some("PEERS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("w"),
+                        quint_oracle::PathSeg::ident("signings"),
+                    ]),
+                    qids::next_signing(),
+                )
+                .scope("signing")
+                .send();
+        }
+
         Ok(ValidatorProof::new(public_key, peer_id, signature))
     }
 }

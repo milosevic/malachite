@@ -23,6 +23,7 @@ fn make_proof(
     block_on(signer.sign_validator_proof(public_key, peer_id)).unwrap()
 }
 
+#[quint_oracle::test]
 #[test]
 fn preimage_matches_signing_bytes() {
     let (signer, pk_bytes) = make_signer(0xA);
@@ -35,6 +36,7 @@ fn preimage_matches_signing_bytes() {
     );
 }
 
+#[quint_oracle::test]
 #[test]
 fn preimage_layout_is_separator_then_length_prefixed_fields() {
     let (signer, pk_bytes) = make_signer(0xB);
@@ -51,6 +53,7 @@ fn preimage_layout_is_separator_then_length_prefixed_fields() {
     assert_eq!(proof.preimage(), expected);
 }
 
+#[quint_oracle::test]
 #[test]
 fn sign_then_verify_is_valid() {
     let (signer, pk_bytes) = make_signer(0xE);
@@ -60,6 +63,7 @@ fn sign_then_verify_is_valid() {
     assert!(result.is_valid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_tampered_signature() {
     let (signer, pk_bytes) = make_signer(0xF);
@@ -77,6 +81,7 @@ fn verify_rejects_tampered_signature() {
     assert!(result.is_invalid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_mismatched_public_key() {
     let (signer_a, pk_a) = make_signer(0x1);
@@ -89,6 +94,7 @@ fn verify_rejects_mismatched_public_key() {
     assert!(result.is_invalid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_mismatched_peer_id() {
     let (signer, pk_bytes) = make_signer(0x3);
@@ -104,6 +110,7 @@ fn verify_rejects_mismatched_peer_id() {
     assert!(result.is_invalid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_errors_on_malformed_public_key() {
     let (signer, _) = make_signer(0x4);

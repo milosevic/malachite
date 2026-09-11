@@ -1094,6 +1094,84 @@ async fn peer_only_addr_rejects_unknown_in_persistent_peers_only_mode() {
     handle3.shutdown().await.unwrap();
 }
 
+/// Reproduces `persistent_ids_backed_by_configured_addresses`: after a persistent
+/// peer whose address carries `/p2p/<peer_id>` is removed at runtime while it was
+/// never connected, no persistent peer id may be left without a configured address
+/// backing it. The model's `remove_persistent_peer` only cleans the id set when
+/// discovery can resolve the address to a peer id, so it retains the id here; the
+/// real code also reads the identity out of the address, so this test PASSES —
+/// the model is looser than the code and the finding is refuted.
+#[quint_oracle::test]
+#[tokio::test]
+async fn removed_persistent_peer_leaves_no_unbacked_peer_id() {
+    init_logging();
+
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+    let base_port = 39500;
+
+    // node-2 is never spawned: the address is unreachable, so no connection is
+    // ever established and discovery never learns the address -> peer_id mapping.
+    let node2_libp2p_peer_id = keypair2.public().to_peer_id();
+    let node2_addr_with_p2p: malachitebft_network::Multiaddr = format!(
+        "/ip4/127.0.0.1/udp/{}/quic-v1/p2p/{}",
+        base_port + 1,
+        node2_libp2p_peer_id
+    )
+    .parse()
+    .unwrap();
+
+    let mut config1 = make_config(base_port);
+    config1.persistent_peers_only = true;
+
+    let handle1 = spawn(
+        NetworkIdentity::new(
+            "node-1".to_string(),
+            keypair1,
+            Some("test-address-1".to_string()),
+        ),
+        config1,
+        malachitebft_metrics::SharedRegistry::global()
+            .with_moniker("node-1-unbacked-persistent-id".to_string()),
+    )
+    .await
+    .unwrap();
+
+    // Add the persistent peer at runtime; its /p2p/ component seeds the id set.
+    let result = handle1
+        .add_persistent_peer(node2_addr_with_p2p.clone())
+        .await
+        .unwrap();
+    assert_eq!(result, Ok(()));
+
+    let dump = handle1.dump_state().await.unwrap();
+    assert!(dump.persistent_peer_ids.contains(&node2_libp2p_peer_id));
+    assert!(dump.persistent_peer_addrs.contains(&node2_addr_with_p2p));
+
+    // Remove it again, without the peer ever having connected.
+    let result = handle1
+        .remove_persistent_peer(node2_addr_with_p2p.clone())
+        .await
+        .unwrap();
+    assert_eq!(result, Ok(()));
+
+    let dump = handle1.dump_state().await.unwrap();
+    assert!(!dump.persistent_peer_addrs.contains(&node2_addr_with_p2p));
+
+    // The property's real-world counterpart: every retained persistent peer id is
+    // backed by a currently configured persistent address.
+    for peer_id in &dump.persistent_peer_ids {
+        assert!(
+            dump.persistent_peer_addrs
+                .iter()
+                .any(|a| a.to_string().contains(&format!("/p2p/{peer_id}"))),
+            "persistent peer id {peer_id} is not backed by any configured persistent address"
+        );
+    }
+
+    handle1.shutdown().await.unwrap();
+}
+
 fn init_logging() {
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, FmtSubscriber};

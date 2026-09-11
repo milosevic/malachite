@@ -199,7 +199,8 @@ async fn replay_keeps_the_intact_entries_after_a_damaged_one() {
     node.stop(None);
 
     assert_eq!(
-        recovered, ENTRIES - 1,
+        recovered,
+        ENTRIES - 1,
         "the replay dropped the intact entries that follow the damaged one"
     );
 }

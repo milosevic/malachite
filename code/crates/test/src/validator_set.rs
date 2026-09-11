@@ -52,6 +52,24 @@ impl malachitebft_core_types::Validator<TestContext> for Validator {
     }
 }
 
+/// Quint oracle: each validator's address's LEXICOGRAPHIC RANK inside its own set.
+/// The real addresses are seed-derived hex, which no enumerable spec domain can
+/// hold; the rank is a plain int and preserves exactly the comparison the documented
+/// validator ordering is defined by (rank ascending iff address ascending).
+fn oracle_addr_ranks(validators: &[Validator]) -> Vec<i64> {
+    let mut sorted: Vec<String> = validators.iter().map(|v| v.address.to_string()).collect();
+    sorted.sort();
+    sorted.dedup();
+
+    validators
+        .iter()
+        .map(|v| {
+            let address = v.address.to_string();
+            sorted.iter().position(|a| a == &address).unwrap_or(0) as i64
+        })
+        .collect()
+}
+
 /// A validator set contains a list of validators sorted by address.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidatorSet {
@@ -73,13 +91,75 @@ impl ValidatorSet {
     pub fn new(validators: impl IntoIterator<Item = Validator>) -> Self {
         let validators: Vec<_> = validators.into_iter().collect();
 
+        let total = validators
+            .iter()
+            .try_fold(0u64, |acc, v| acc.checked_add(v.voting_power));
+
+        if quint_oracle::enabled() {
+            // The vector cannot travel as one logged argument (replay only accepts a
+            // value the spec's own nondet set contains), so the collection this
+            // constructor performs is reported item by item: begin, one add per
+            // validator, then the arm that ran.
+            quint_oracle::Event::builder(quint_oracle::current_test(), "ValidatorSetnew_begin")
+                .scope("core-types-domain")
+                .send();
+
+            for (validator, addr_rank) in validators.iter().zip(oracle_addr_ranks(&validators)) {
+                quint_oracle::Event::builder(quint_oracle::current_test(), "ValidatorSetnew_add")
+                    .argument("power", validator.voting_power, Some("POWERS"))
+                    .argument("addr_rank", addr_rank, Some("ADDRESSES"))
+                    .scope("core-types-domain")
+                    .send();
+            }
+
+            if validators.is_empty() {
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "ValidatorSetnew_empty_panics",
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("panic_vset_empty"),
+                    ],
+                    true,
+                )
+                .scope("core-types-domain")
+                .send();
+            } else if total.is_none() {
+                quint_oracle::Event::builder(
+                    quint_oracle::current_test(),
+                    "ValidatorSetnew_power_overflow_panics",
+                )
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("panic_vset_power_overflow"),
+                    ],
+                    true,
+                )
+                .scope("core-types-domain")
+                .send();
+            }
+        }
+
         assert!(!validators.is_empty());
 
         // Verify that total voting power does not overflow u64
-        validators
-            .iter()
-            .try_fold(0u64, |acc, v| acc.checked_add(v.voting_power))
-            .expect("total voting power overflow");
+        total.expect("total voting power overflow");
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "ValidatorSetnew")
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("vset_installed"),
+                    ],
+                    true,
+                )
+                .scope("core-types-domain")
+                .send();
+        }
 
         Self {
             validators: Arc::new(validators),
@@ -103,20 +183,84 @@ impl ValidatorSet {
 
     /// The total voting power of the validator set
     pub fn total_voting_power(&self) -> VotingPower {
-        self.validators
+        let total = self
+            .validators
             .iter()
             .try_fold(0u64, |acc, v| acc.checked_add(v.voting_power))
-            .expect("total voting power overflow")
+            .expect("total voting power overflow");
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "ValidatorSettotal_voting_power",
+            )
+            .assert(
+                vec![
+                    quint_oracle::PathSeg::ident("state"),
+                    quint_oracle::PathSeg::ident("vset_installed"),
+                ],
+                true,
+            )
+            .scope("core-types-domain")
+            .send();
+        }
+
+        total
     }
 
     /// Get a validator by its index
     pub fn get_by_index(&self, index: usize) -> Option<&Validator> {
-        self.validators.get(index)
+        let found = self.validators.get(index);
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "ValidatorSetget_by_index")
+                .argument("index", index as i64, Some("INDICES"))
+                .assert(
+                    vec![
+                        quint_oracle::PathSeg::ident("state"),
+                        quint_oracle::PathSeg::ident("last_index_code"),
+                    ],
+                    if found.is_some() { 1i64 } else { 0i64 },
+                )
+                .scope("core-types-domain")
+                .send();
+        }
+
+        found
     }
 
     /// Get a validator by its address
     pub fn get_by_address(&self, address: &Address) -> Option<&Validator> {
-        self.validators.iter().find(|v| &v.address == address)
+        let found = self.validators.iter().find(|v| &v.address == address);
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "ValidatorSetget_by_address",
+            )
+            .argument(
+                "address",
+                self.validators
+                    .iter()
+                    .zip(oracle_addr_ranks(&self.validators))
+                    .find(|(v, _)| &v.address == address)
+                    .map_or(-1, |(_, rank)| rank),
+                // SIGNER_RANKS: this argument is -1 for an address the set does
+                // not contain, which ADDRESSES (ranks only) cannot hold.
+                Some("SIGNER_RANKS"),
+            )
+            .assert(
+                vec![
+                    quint_oracle::PathSeg::ident("state"),
+                    quint_oracle::PathSeg::ident("last_lookup_code"),
+                ],
+                if found.is_some() { 1i64 } else { 0i64 },
+            )
+            .scope("core-types-domain")
+            .send();
+        }
+
+        found
     }
 
     pub fn get_by_public_key(&self, public_key: &PublicKey) -> Option<&Validator> {
@@ -130,6 +274,12 @@ impl ValidatorSet {
 
 impl malachitebft_core_types::ValidatorSet<TestContext> for ValidatorSet {
     fn count(&self) -> usize {
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "ValidatorSetcount")
+                .scope("core-types-domain")
+                .send();
+        }
+
         self.validators.len()
     }
 

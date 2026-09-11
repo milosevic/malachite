@@ -198,7 +198,7 @@ fn re_proposal_with_a_future_justification_is_rejected() {
 fn vote_quorum_raises_valid() {
     let me = addr(1);
     let info = Info::<TestContext>::new_proposer(at(2), &me);
-    let t = apply(&ctx(), proposing(2), &info, Input::VoteQuorumForValue(ValueId::new(5)));
+    let t = apply(&ctx(), proposing(2), &info, Input::VoteQuorumForValue(at(2), ValueId::new(5)));
 
     assert!(t.valid);
     let got = t.next_state.valid.expect("valid must be set");
@@ -214,7 +214,7 @@ fn vote_quorum_never_lowers_valid() {
     let info = Info::<TestContext>::new_proposer(at(2), &me);
     let state = proposing(2).set_valid(at(2), ValueId::new(1));
 
-    let t = apply(&ctx(), state, &info, Input::VoteQuorumForValue(ValueId::new(2)));
+    let t = apply(&ctx(), state, &info, Input::VoteQuorumForValue(at(2), ValueId::new(2)));
     assert!(!t.valid, "nothing to raise, so the input does not apply");
     assert_eq!(t.next_state.valid.expect("kept").value_id, ValueId::new(1));
 }
@@ -342,7 +342,7 @@ fn vote_quorum_while_waiting_makes_the_proposer_repropose() {
     let mut waiting = proposing(3);
     waiting.awaiting_valid = true;
 
-    let t = apply(&ctx(), waiting, &info, Input::VoteQuorumForValue(ValueId::new(8)));
+    let t = apply(&ctx(), waiting, &info, Input::VoteQuorumForValue(at(3), ValueId::new(8)));
 
     assert!(t.valid);
     assert!(!t.next_state.awaiting_valid);
@@ -412,4 +412,92 @@ fn a_decision_is_never_replaced_after_a_new_round() {
         Value::new(7),
         "the first decision is final"
     );
+}
+
+// ---------------------------------------------- regressions found by independent review
+
+/// A `NewRound` for the round we are ALREADY in must not reset the step. Without the
+/// step guard the node returns to Propose after voting and can cast a SECOND vote in the
+/// same round — equivocating against itself. Algorithm 1 only ever calls
+/// StartRound(round+1), so same-round re-entry never occurs in the protocol.
+#[test]
+fn same_round_new_round_cannot_reset_the_step_and_allow_a_second_vote() {
+    let me = addr(1);
+    let info = Info::<TestContext>::new_proposer(at(4), &me);
+
+    // Vote once in round 4.
+    let voted = apply(&ctx(), proposing(4), &info, Input::Proposal(fresh_proposal(4, 7, me)));
+    assert_eq!(voted.next_state.step, Step::Precommit);
+
+    // A NewRound for the same round must not take us back to Propose.
+    let re_entered = apply(&ctx(), voted.next_state, &info, Input::NewRound(at(4)));
+    assert_eq!(
+        re_entered.next_state.step,
+        Step::Precommit,
+        "re-entering the current round must not rewind the step"
+    );
+
+    // And therefore a second proposal cannot draw a second vote for round 4.
+    let second = apply(&ctx(), re_entered.next_state, &info, Input::Proposal(fresh_proposal(4, 9, me)));
+    assert!(second.valid == false || second.output.is_none(), "no second vote in one round");
+}
+
+/// L29-L30 uses `<=`, not `<`: when the justifying round EQUALS the round we hold valid,
+/// the paper replaces the value. With n > 5f two 2f+1 quorums need not intersect, so two
+/// different values can each hold a quorum in the same round.
+#[test]
+fn re_proposal_at_an_equal_valid_round_replaces_the_held_value() {
+    let me = addr(1);
+    let info = Info::<TestContext>::new_proposer(at(5), &me);
+    let state = proposing(5).set_valid(at(2), ValueId::new(77));
+
+    let t = apply(&ctx(), state, &info, Input::ProposalAndVoteQuorumPrevious(re_proposal(5, 9, 2, me)));
+
+    assert!(t.valid);
+    let got = t.next_state.valid.expect("valid must be set");
+    assert_eq!(got.round, at(2));
+    assert_eq!(
+        got.value_id,
+        Value::new(9).id(),
+        "at an equal justifying round the value is replaced, not kept"
+    );
+}
+
+/// L39 latches per round r, and arms the timeout for r — which may be above the round we
+/// are at. A single per-round bit let a quorum for one round consume the only slot and
+/// leave another round's timeout unarmed forever.
+#[test]
+fn quorum_any_arms_each_round_separately() {
+    let me = addr(1);
+    let info = Info::<TestContext>::new_proposer(at(0), &me);
+
+    let first = apply(&ctx(), proposing(0), &info, Input::QuorumAny(at(0)));
+    assert!(first.valid, "round 0 arms");
+
+    let second = apply(&ctx(), first.next_state, &info, Input::QuorumAny(at(1)));
+    assert!(second.valid, "round 1 must arm too, not be swallowed by round 0");
+    match second.output {
+        Some(Output::ScheduleTimeout(to)) => assert_eq!(to.round, at(1)),
+        other => panic!("expected a timeout for round 1, got {other:?}"),
+    }
+
+    let repeat = apply(&ctx(), second.next_state, &info, Input::QuorumAny(at(1)));
+    assert!(!repeat.valid, "but each round still arms at most once");
+}
+
+/// L47: the quorum that ends a proposer's wait is for `round_p - 1`, not the current
+/// round. Gating the observation rule on the current round made L47 unreachable and forced
+/// every wait to burn its full timeout.
+#[test]
+fn a_vote_quorum_from_the_previous_round_ends_the_wait() {
+    let me = addr(1);
+    let info = Info::<TestContext>::new_proposer(at(3), &me);
+    let mut waiting = proposing(3);
+    waiting.awaiting_valid = true;
+
+    let t = apply(&ctx(), waiting, &info, Input::VoteQuorumForValue(at(2), ValueId::new(8)));
+
+    assert!(t.valid, "a quorum for round 2 must be accepted while at round 3");
+    assert_eq!(t.next_state.valid.expect("set").round, at(2));
+    assert!(!t.next_state.awaiting_valid, "and it ends the wait");
 }

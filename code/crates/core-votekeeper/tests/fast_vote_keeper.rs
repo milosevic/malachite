@@ -218,3 +218,34 @@ fn pruning_drops_rounds_and_keeps_evidence() {
     assert!(k.has_vote_quorum(Round::new(5), &ValueId::new(9)), "round 5 survives");
     assert_eq!(k.evidence().len(), 1, "evidence is never pruned");
 }
+
+// ---------------------------------------------- regression found by independent review
+
+/// Fast Tendermint has ONE voting step, named precommit. A prevote is not part of this
+/// protocol and must not be tallied: counting it would let a value reach a threshold on
+/// votes the protocol never defined, and would misread a prevote/precommit pair from one
+/// validator as equivocation.
+#[test]
+fn a_prevote_is_never_tallied() {
+    let (a, mut k) = setup([1, 1, 1, 1, 1, 1]);
+
+    let prevote = |addr| {
+        SignedVote::new(
+            Vote::new_prevote(Height::new(1), Round::new(0), val(7), addr),
+            Signature::test(),
+        )
+    };
+
+    for i in 0..5 {
+        assert!(k.apply_vote(prevote(a[i])).is_empty(), "prevotes report nothing");
+    }
+    assert!(
+        !k.has_vote_quorum(Round::new(0), &ValueId::new(7)),
+        "five prevotes must not make a value valid"
+    );
+    assert!(!k.has_decision_quorum(Round::new(0), &ValueId::new(7)));
+
+    // And a precommit from a validator that already prevoted is NOT equivocation.
+    assert!(k.apply_vote(vote_for(0, val(9), a[0])).is_empty());
+    assert_eq!(k.evidence().len(), 0, "a prevote/precommit pair is not a double vote");
+}

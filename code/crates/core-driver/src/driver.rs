@@ -171,6 +171,7 @@ where
                 .argument("w1", self.oracle_weight(1), Some("WEIGHTS"))
                 .argument("w2", self.oracle_weight(2), Some("WEIGHTS"))
                 .argument("w3", self.oracle_weight(3), Some("WEIGHTS"))
+                .argument("address", self.oracle_addr(&self.address), Some("VSET"))
                 .assert(
                     Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("rs"), quint_oracle::PathSeg::ident("round")]),
                     self.round_state.round.as_i64(),
@@ -291,6 +292,18 @@ where
                 )
                 .scope("driver")
                 .send();
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "take_proposal_evidence")
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("proposalPairs")]),
+                    0i64,
+                )
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("proposalAddrs")]),
+                    0i64,
+                )
+                .scope("equivocation-detection")
+                .send();
         }
 
         evidence
@@ -305,7 +318,46 @@ where
         existing: SignedProposal<Ctx>,
         conflicting: SignedProposal<Ctx>,
     ) {
+        // Quint oracle: the pair as the spec's `record_proposal_evidence` arm
+        // picks it — one validator, one round, and each proposal's value and
+        // pol_round, so replay pins every pick by name.
+        let oracle_pair = if quint_oracle::enabled() {
+            Some((
+                self.oracle_addr(existing.validator_address()),
+                existing.round().as_i64(),
+                alloc::format!("{}", existing.value().id()),
+                existing.pol_round().as_i64(),
+                alloc::format!("{}", conflicting.value().id()),
+                conflicting.pol_round().as_i64(),
+            ))
+        } else {
+            None
+        };
+
         self.proposal_keeper.record_evidence(existing, conflicting);
+
+        if let Some((pproposer, pround, pvalue, ppol, pother, pother_pol)) = oracle_pair {
+            quint_oracle::Event::builder(
+                quint_oracle::current_test(),
+                "record_proposal_evidence",
+            )
+            .argument("pproposer", pproposer, Some("ADDRS"))
+            .argument("pround", pround, Some("ROUNDS"))
+            .argument("pvalue", pvalue.as_str(), Some("VALUES"))
+            .argument("ppol", ppol, Some("POL_ROUNDS"))
+            .argument("pother", pother.as_str(), Some("VALUES"))
+            .argument("pother_pol", pother_pol, Some("POL_ROUNDS"))
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("propEvidenceCount")]),
+                self.proposal_keeper.evidence_counts().0 as i64,
+            )
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("d"), quint_oracle::PathSeg::ident("rs"), quint_oracle::PathSeg::ident("round")]),
+                self.round_state.round.as_i64(),
+            )
+            .scope("driver")
+            .send();
+        }
     }
 
     /// Remove and return recorded evidence of vote equivocation.
@@ -319,6 +371,18 @@ where
                     self.round_state.round.as_i64(),
                 )
                 .scope("driver")
+                .send();
+
+            quint_oracle::Event::builder(quint_oracle::current_test(), "take_vote_evidence")
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("votePairs")]),
+                    0i64,
+                )
+                .assert(
+                    Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("voteAddrs")]),
+                    0i64,
+                )
+                .scope("equivocation-detection")
                 .send();
         }
 
@@ -797,6 +861,20 @@ where
 
         // Update the proposer for the new round
         self.proposer = Some(proposer);
+
+        if quint_oracle::enabled() {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "new_round")
+                .argument("round", self.round_state.round.as_i64(), Some("VOTE_ROUNDS"))
+                .assert(
+                    Vec::from([
+                        quint_oracle::PathSeg::ident("node"),
+                        quint_oracle::PathSeg::ident("round"),
+                    ]),
+                    self.round_state.round.as_i64(),
+                )
+                .scope("equivocation-detection")
+                .send();
+        }
 
         self.apply_input(round, RoundInput::NewRound(round))
     }

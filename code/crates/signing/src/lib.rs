@@ -18,6 +18,9 @@ pub use error::Error;
 mod ext;
 pub use ext::VerifierExt;
 
+#[cfg(feature = "quint-oracle")]
+pub mod quint_ids;
+
 /// The result of a signature verification operation.
 pub enum VerificationResult {
     /// The signature is valid.

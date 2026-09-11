@@ -59,6 +59,7 @@ fn signed_precommit_with_extension(
     signed
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_succeeds_when_every_precommit_carries_a_bound_extension() {
     let ctx = TestContext::new();
@@ -87,6 +88,7 @@ fn verify_succeeds_when_every_precommit_carries_a_bound_extension() {
     .expect("certificate with bound extensions must verify");
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_when_no_precommit_carries_an_extension() {
     let ctx = TestContext::new();
@@ -121,6 +123,7 @@ fn verify_rejects_when_no_precommit_carries_an_extension() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_accepts_missing_extensions_when_policy_is_disabled() {
     let ctx = TestContext::new();
@@ -149,6 +152,7 @@ fn verify_accepts_missing_extensions_when_policy_is_disabled() {
     .expect("missing extensions are accepted when the policy is disabled");
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_present_extension_when_policy_is_disabled() {
     let ctx = TestContext::new();
@@ -181,6 +185,7 @@ fn verify_rejects_present_extension_when_policy_is_disabled() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_when_any_precommit_lacks_an_extension() {
     let ctx = TestContext::new();
@@ -213,6 +218,7 @@ fn verify_rejects_when_any_precommit_lacks_an_extension() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_extension_swapped_between_validators() {
     let ctx = TestContext::new();
@@ -251,6 +257,7 @@ fn verify_rejects_extension_swapped_between_validators() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_extension_signed_for_different_height() {
     let ctx = TestContext::new();
@@ -296,6 +303,7 @@ fn verify_rejects_extension_signed_for_different_height() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_extension_signed_for_different_round() {
     let ctx = TestContext::new();
@@ -341,6 +349,7 @@ fn verify_rejects_extension_signed_for_different_round() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_extension_signed_for_different_value_id() {
     let ctx = TestContext::new();
@@ -386,6 +395,7 @@ fn verify_rejects_extension_signed_for_different_value_id() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_tampered_commit_signature() {
     let ctx = TestContext::new();
@@ -423,6 +433,7 @@ fn verify_rejects_tampered_commit_signature() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_when_voting_power_below_quorum() {
     let ctx = TestContext::new();
@@ -457,6 +468,7 @@ fn verify_rejects_when_voting_power_below_quorum() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_duplicate_validator_signature() {
     let ctx = TestContext::new();
@@ -490,6 +502,7 @@ fn verify_rejects_duplicate_validator_signature() {
     ));
 }
 
+#[quint_oracle::test]
 #[test]
 fn projection_to_commit_certificate_drops_extensions_but_keeps_signatures() {
     let ctx = TestContext::new();
@@ -524,6 +537,7 @@ fn projection_to_commit_certificate_drops_extensions_but_keeps_signatures() {
     }
 }
 
+#[quint_oracle::test]
 #[test]
 fn vote_extensions_view_carries_only_signed_extensions() {
     let ctx = TestContext::new();
@@ -551,6 +565,7 @@ fn vote_extensions_view_carries_only_signed_extensions() {
     assert!(!addrs.contains(&a1));
 }
 
+#[quint_oracle::test]
 #[test]
 fn from_commit_certificate_and_extensions_rebuilds_the_bundled_type_and_verifies() {
     let ctx = TestContext::new();
@@ -599,6 +614,7 @@ fn from_commit_certificate_and_extensions_rebuilds_the_bundled_type_and_verifies
     .expect("rebuilt certificate must verify against the validator set");
 }
 
+#[quint_oracle::test]
 #[test]
 fn from_commit_certificate_and_extensions_discards_unmatched_extensions() {
     let ctx = TestContext::new();
@@ -652,6 +668,7 @@ fn from_commit_certificate_and_extensions_discards_unmatched_extensions() {
     .expect("rebuilt certificate must verify after discarding unmatched extensions");
 }
 
+#[quint_oracle::test]
 #[test]
 fn constructors_canonicalize_signature_order_by_address() {
     let ctx = TestContext::new();
@@ -696,6 +713,7 @@ fn constructors_canonicalize_signature_order_by_address() {
     assert_eq!(from_pair_addresses, sorted_addresses);
 }
 
+#[quint_oracle::test]
 #[test]
 fn extended_commit_signature_constructor_round_trips() {
     let ctx = TestContext::new();

@@ -88,6 +88,8 @@ fn test_proposal_evidence_deduplication() {
     ];
 
     for case in cases {
+        // Oracle test boundary: a fresh EvidenceMap per case means a fresh run.
+        let _oracle_case = quint_oracle::register_test("test_proposal_evidence_deduplication");
         let mut evidence = EvidenceMap::<TestContext>::new();
 
         for &(addr_id, round, values) in case.evidence {
@@ -178,4 +180,69 @@ fn store_proposal_surfaces_equivocation_to_caller() {
 
     keeper.record_evidence(first, conflicting);
     assert_eq!(keeper.evidence().len(), 1);
+}
+
+/// reproduces obs:proposal_evidence_exceeds_vote_cap — fails on current code.
+///
+/// The vote-side `EvidenceMap` (core-votekeeper) caps each validator's evidence
+/// list at `MAX_EVIDENCE_PER_VALIDATOR`; the proposal-side `EvidenceMap` applies
+/// the same either-order dedup but no bound at all. Evidence only drains once
+/// per height (`log_and_finalize`), so a proposer that equivocates in every round
+/// of one undecided height grows its list without limit.
+///
+/// Driven through the real driver entry point: `Driver::process` with `NewRound`
+/// and two conflicting `Proposal` inputs per round, exactly as the consensus
+/// layer feeds it, then the production drain `Driver::take_proposal_evidence`.
+#[test]
+#[ignore = "reproduces obs:proposal_evidence_exceeds_vote_cap"]
+fn proposal_evidence_per_validator_stays_within_the_vote_cap() {
+    use malachitebft_core_votekeeper::evidence::MAX_EVIDENCE_PER_VALIDATOR;
+    use malachitebft_test::utils::validators::make_validators;
+    use malachitebft_test::ValidatorSet;
+
+    use arc_malachitebft_core_driver::{Driver, Input};
+
+    let [(v1, _sk1), (v2, sk2), (v3, _sk3), (v4, _sk4)] = make_validators([10, 10, 10, 10]);
+    let validator_set = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3, v4]);
+
+    let ctx = TestContext::new();
+    let height = Height::new(1);
+    let mut driver = Driver::new(ctx, height, validator_set, v1.address, Default::default());
+
+    // One more round than the vote map would ever keep pairs for.
+    let rounds = MAX_EVIDENCE_PER_VALIDATOR + 1;
+
+    for r in 0..rounds {
+        let round = Round::new(r as u32);
+
+        driver
+            .process(Input::NewRound(height, round, v2.address))
+            .expect("NewRound accepted");
+
+        // The round's proposer sends two conflicting proposals.
+        for value in [Value::new(100 + r as u64), Value::new(200 + r as u64)] {
+            let proposal = Proposal::new(height, round, value, Round::Nil, v2.address);
+            let signed = SignedProposal::new(proposal.clone(), sk2.sign(&proposal.to_sign_bytes()));
+            driver
+                .process(Input::Proposal(signed, Validity::Valid))
+                .expect("Proposal accepted");
+        }
+    }
+
+    // The height drains its evidence exactly once, at finalization.
+    let evidence = driver.take_proposal_evidence();
+    let pairs = evidence
+        .get(&v2.address)
+        .map(|pairs| pairs.len())
+        .unwrap_or(0);
+
+    assert_eq!(
+        rounds, 4,
+        "the scenario must offer more distinct pairs than the cap"
+    );
+    assert!(
+        pairs <= MAX_EVIDENCE_PER_VALIDATOR,
+        "one validator's proposal evidence grew to {pairs} pairs, past the \
+         per-validator cap of {MAX_EVIDENCE_PER_VALIDATOR} the vote evidence map enforces"
+    );
 }

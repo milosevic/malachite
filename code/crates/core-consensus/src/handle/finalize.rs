@@ -76,6 +76,30 @@ where
         votes: state.driver.take_vote_evidence(),
     };
 
+    if quint_oracle::enabled() {
+        // Both keepers were just drained into `evidence`; the height's evidence
+        // reaches the application exactly here.
+        quint_oracle::Event::builder(quint_oracle::current_test(), "log_and_finalize")
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("votePairs")]),
+                0i64,
+            )
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("voteAddrs")]),
+                0i64,
+            )
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("proposalPairs")]),
+                0i64,
+            )
+            .assert(
+                Vec::from([quint_oracle::PathSeg::ident("ghost"), quint_oracle::PathSeg::ident("proposalAddrs")]),
+                0i64,
+            )
+            .scope("equivocation-detection")
+            .send();
+    }
+
     perform!(
         co,
         Effect::Finalize(certificate, extensions, evidence, Default::default())

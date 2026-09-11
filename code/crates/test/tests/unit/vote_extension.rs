@@ -29,6 +29,7 @@ fn scope(
     )
 }
 
+#[quint_oracle::test]
 #[test]
 fn sign_then_verify_in_same_scope_is_valid() {
     let (signer, addr) = make_signer(0x10);
@@ -48,6 +49,7 @@ fn sign_then_verify_in_same_scope_is_valid() {
     assert!(result.is_valid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_extension_replayed_at_different_height() {
     let (signer, addr) = make_signer(0x11);
@@ -68,6 +70,7 @@ fn verify_rejects_extension_replayed_at_different_height() {
     assert!(result.is_invalid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_extension_replayed_at_different_round() {
     let (signer, addr) = make_signer(0x12);
@@ -88,6 +91,7 @@ fn verify_rejects_extension_replayed_at_different_round() {
     assert!(result.is_invalid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_extension_replayed_for_different_value_id() {
     let (signer, addr) = make_signer(0x13);
@@ -108,6 +112,7 @@ fn verify_rejects_extension_replayed_for_different_value_id() {
     assert!(result.is_invalid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_extension_attributed_to_different_validator() {
     let (signer_a, addr_a) = make_signer(0x14);
@@ -129,6 +134,7 @@ fn verify_rejects_extension_attributed_to_different_validator() {
     assert!(result.is_invalid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_tampered_extension_payload() {
     let (signer, addr) = make_signer(0x16);
@@ -151,6 +157,7 @@ fn verify_rejects_tampered_extension_payload() {
     assert!(result.is_invalid());
 }
 
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_signature_from_different_key() {
     let (signer_a, addr_a) = make_signer(0x17);
@@ -175,6 +182,7 @@ fn verify_rejects_signature_from_different_key() {
 /// implementation stops including the vote-extension domain tag in the
 /// verified preimage, this hand-crafted domainless signature would become
 /// valid for the otherwise matching scope and extension.
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_domainless_vote_extension_signature() {
     const HEIGHT: u64 = 7;
@@ -217,6 +225,7 @@ fn verify_rejects_domainless_vote_extension_signature() {
 /// not pass verification against any (val-shaped) scope, i.e. the
 /// `NilOrVal` wrapper in the canonical preimage cannot be confused for an
 /// honest val-scope signature.
+#[quint_oracle::test]
 #[test]
 fn verify_rejects_manually_crafted_nil_value_extension_signature() {
     const HEIGHT: u64 = 7;
