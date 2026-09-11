@@ -31,7 +31,8 @@ independent reviewer, not by Studio or by the tests.
 | F-26 | Three of four "property violations" were MODEL defects, not code | Studio (self-diagnosis) | — | `7dbe76b6` | four spec fixes **offered**, need the desktop | open |
 | F-27a | My F-22d fix over-widened: a quorum for a FUTURE round set `valid` there, locking the node to nil votes | reviewer (round 2) | high | `51c77153` | next commit | **fixed** |
 | F-27b | `Commit` not terminal — a decided node scheduled timeouts and emitted proposals | reviewer (round 2) | medium-high | `51c77153` | next commit | **fixed** |
-| F-27c | Keeper: outputs lacked their round; `prune_votes` destroyed L27/L42 justification and reset latches; `Round::Nil` tallied; no params ordering check | reviewer (round 2) | medium | `51c77153` | next commit | **fixed** |
+| F-27c | Keeper: outputs lacked their round; `prune_votes` destroyed L27/L42 justification and reset latches; `Round::Nil` tallied; no params ordering check | reviewer (round 2) | medium | `51c77153` | `b245fa86` | **fixed** |
+| F-28 | Pruning blinds equivocation detection for the pruned round — a late conflicting vote goes undetected | Studio (design worker) | medium | `b245fa86` | — | **open**, also affects the classic keeper |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -643,6 +644,34 @@ safety latch, and unlike `scheduled_timeouts` it was not excluded from equality 
 otherwise-identical states compared unequal. **The equality inconsistency is fixed**; the
 underlying issue stands: with `step`, `valid` and `decision` private, F-27a and F-27b would
 both have been unreachable by construction. That is now the highest-leverage open item.
+
+## F-28 — Pruning blinds equivocation detection for the pruned round
+
+- **Found against:** `b245fa86` · **Source:** Studio's `fast-vote-keeper` design worker,
+  which surfaced it as a consequence of modelling `prune_votes` exactly and then judged it
+  **a real defect, pre-existing** · **Status:** open, not fixed
+- **Component:** `fast-vote-keeper`, and by inspection the classic `vote-keeper` too
+- **Behavior:** `prune_votes(min_round)` drops `per_round`, which holds `votes_by_address`
+  — the record of the FIRST vote each validator cast in that round. Equivocation is
+  detected by comparing a new vote against that first vote. After pruning, a replayed vote
+  for a pruned round is re-tallied as a first vote, so the memory it would have conflicted
+  with is gone.
+- **Consequence:** a validator that voted A in a round can, once that round is pruned, vote
+  B for the same round and **not be detected as equivocating**. Votes for old rounds do
+  arrive late in practice — through sync, WAL replay, or a catching-up peer.
+- **Why it matters beyond this component:** accountability evidence is per-HEIGHT, and
+  `EvidenceMap` is deliberately never pruned precisely because evidence must survive the
+  round it came from. A round being behind us is not a reason to stop detecting a double
+  vote in it.
+- **I introduced the occasion, not the defect.** My F-27c fix kept the reached-threshold
+  record alive across pruning so L27 and L42 keep their justifications; it did not keep the
+  first-vote record, and I did not notice that gap until the model was designed against it.
+  The classic keeper prunes the same way, so the defect predates this work.
+- **Candidate fix:** retain `votes_by_address` (or a compact digest of it) across pruning,
+  the way the `reached` record and the evidence map already are. Cost is one map per height
+  rather than per round, bounded by the validator set.
+- **Not fixed yet** because it touches the classic keeper's behaviour as well, and that is
+  a judgement about existing Malachite semantics rather than about the 5f+1 work.
 
 ---
 
