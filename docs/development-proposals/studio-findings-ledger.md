@@ -28,6 +28,7 @@ independent reviewer, not by Studio or by the tests.
 | F-22c | L39 precommit timeout never armable for a later round | reviewer | high (liveness) | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-22d | `WaitForValid` unimplementable; every wait burned its full timeout | reviewer | medium (liveness) | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-25 | `State` invariants bypassable through public mutators | Studio (model read) | high | `85d486e2` | `99c8468c` | **fixed**, partially — fields still `pub` |
+| F-26 | Three of four "property violations" were MODEL defects, not code | Studio (self-diagnosis) | — | `7dbe76b6` | four spec fixes **offered**, need the desktop | open |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -505,6 +506,67 @@ second decision quorum      -> guard was `step != Commit`, so it PASSED
   public API can bypass it, enforces nothing.
 - **Incompletely fixed — see F-22 open items:** every `State` field is still `pub`, so
   these guards remain advisory. Closing that needs a test refactor.
+
+## F-26 — Three of the four "property violations" were MODEL defects, not code defects
+
+- **Found against:** `7dbe76b6` (after all five review fixes) · **Source:** Studio's own
+  post-test refinement · **Status:** four spec fixes OFFERED, awaiting the desktop flow
+- **This corrects an earlier claim of mine.** I reported four property violations on
+  `fast-round-state-machine` as if all four indicted the code. After the re-sync, Studio
+  itself judged three of them to be mis-specified properties. The component now reports
+  `findingCount: 0`, `productBugs: 0`, 25 tests logged, `specGaps: 0`.
+
+| Property | Studio's verdict | Was the code wrong? |
+| --- | --- | --- |
+| `decision_is_final_and_commit_is_terminal` | model is **stale** — spec still guards on `step != Commit`, code now guards on `decision.is_none()` | **Yes, originally** — see F-24. Fixed in `e600629e`; the spec has not caught up |
+| `round_timeout_armed_at_most_once_per_round` | `staleTimeoutBits` conjunct mis-specified | **Yes, separately** — see F-20/F-22a. The conjunct is *also* wrong |
+| `repropose_only_carries_a_value_we_hold` | latch compares against `pre.valid`, not the post-state | **No** |
+| `valid_p_never_decreases` | second conjunct unsound under the model's own shape | **No** |
+
+### Why the two non-defects were false alarms
+
+**`repropose_only_carries_a_value_we_hold`.** `reproposeBroken(pre, r)` judges an
+`ORepropose` output against the valid pair held *before* the transition. But the
+L36-L37 → L15-L16 path raises `valid` and re-proposes the just-raised pair in **one**
+step: `VoteQuorumForValue` sets valid, then `propose_now` reads it. The re-proposal does
+name a pair the state holds — one raised within the same transition. Already pinned by the
+passing test `vote_quorum_while_waiting_makes_the_proposer_repropose`.
+
+**`valid_p_never_decreases`.** The property is
+`not(validDecreased) and validRound(state) == maxValidRound`. The first conjunct is the
+genuine monotonicity claim and it holds. The second compares against a running maximum over
+the **whole run**, but the model's main action takes a nondeterministically chosen `pre` —
+`apply` is a pure function and callers hand it states they built themselves, which is why
+the instrumentation logs the pre-state whole. So a step can legitimately begin from an
+unrelated state whose valid round is below a maximum reached earlier. Already pinned by the
+passing test `vote_quorum_never_lowers_valid`.
+
+### What Studio offered
+
+Two concrete fix options per request, each with a cost estimate and what it enables — for
+example, judging the re-proposal against `r.st.valid` instead of `pre.valid`, or comparing
+`staleTimeoutBits` against `pre.scheduled` so only bits that *survived* a round change are
+flagged. Studio also noted for each that **no new test could fail**, because the correct
+behaviour is already pinned by a passing test, so generating one would only duplicate it.
+
+### Why this is not applied yet
+
+The operator MCP has no call that accepts a post-test refinement, and the Studio skill is
+explicit that model repair after setup is a desktop flow. `advance_component` returns
+`ready` and declines it. The four spec fixes are waiting in the Studio desktop.
+
+**Nothing is blocked on this.** These are model repairs; the code is correct in all four
+cases and its 27 tests pass. Until they are applied, the component will keep reporting
+these four properties as violated, and that report should be read as stale.
+
+### The lesson for the exercise
+
+A property violation is a claim that the model and the code disagree — it does not say
+which is wrong. Three of four here indicted the model. That is not a failure of the method:
+Studio diagnosed its own specs precisely, cited the exact line and counterexample seed for
+each, and said plainly "not a code defect" rather than leaving me to assume the code was at
+fault. But it does mean a raw violation count is a bad metric, and I should not have
+reported one as though it were a bug count.
 
 ---
 
