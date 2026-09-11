@@ -54,8 +54,8 @@ fn round_zero_proposer_asks_for_a_value() {
     let t = apply(&ctx(), State::new(Height::new(1), Round::Nil), &info, Input::NewRound(at(0)));
 
     assert!(t.valid);
-    assert_eq!(t.next_state.step, Step::Propose);
-    assert!(!t.next_state.awaiting_valid, "round 0 never waits");
+    assert_eq!(t.next_state.step(), Step::Propose);
+    assert!(!t.next_state.is_awaiting_valid(), "round 0 never waits");
     assert!(matches!(t.output, Some(Output::GetValueAndScheduleTimeout(..))));
 }
 
@@ -69,7 +69,7 @@ fn later_round_proposer_waits_for_valid() {
     let t = apply(&ctx(), State::new(Height::new(1), Round::Nil), &info, Input::NewRound(at(3)));
 
     assert!(t.valid);
-    assert!(t.next_state.awaiting_valid, "must wait: valid is nil, round is 3");
+    assert!(t.next_state.is_awaiting_valid(), "must wait: valid is nil, round is 3");
     assert!(matches!(t.output, Some(Output::WaitForValid(_))));
 }
 
@@ -97,7 +97,7 @@ fn unbound_node_votes_for_a_fresh_proposal() {
     let t = apply(&ctx(), proposing(0), &info, Input::Proposal(p));
 
     assert!(t.valid);
-    assert_eq!(t.next_state.step, Step::Precommit, "one voting step, named precommit");
+    assert_eq!(t.next_state.step(), Step::Precommit, "one voting step, named precommit");
     match t.output {
         Some(Output::Vote(_)) => {}
         other => panic!("expected a vote, got {other:?}"),
@@ -115,9 +115,9 @@ fn bound_node_votes_nil_for_a_conflicting_fresh_proposal() {
     let t = apply(&ctx(), state, &info, Input::Proposal(fresh_proposal(2, 42, me)));
 
     assert!(t.valid);
-    assert_eq!(t.next_state.step, Step::Precommit);
+    assert_eq!(t.next_state.step(), Step::Precommit);
     assert_eq!(
-        t.next_state.valid.as_ref().map(|v| v.value_id.clone()),
+        t.next_state.valid().as_ref().map(|v| v.value_id.clone()),
         Some(ValueId::new(7)),
         "a conflicting fresh proposal must not move what we hold valid"
     );
@@ -144,7 +144,7 @@ fn invalid_proposal_draws_a_nil_vote() {
     let t = apply(&ctx(), proposing(0), &info, Input::InvalidProposal);
 
     assert!(t.valid);
-    assert_eq!(t.next_state.step, Step::Precommit);
+    assert_eq!(t.next_state.step(), Step::Precommit);
 }
 
 // ---------------------------------------------------------------- re-proposals
@@ -161,7 +161,7 @@ fn re_proposal_with_recent_enough_justification_is_accepted() {
     let t = apply(&ctx(), state, &info, Input::ProposalAndVoteQuorumPrevious(re_proposal(4, 9, 2, me)));
 
     assert!(t.valid);
-    let got = t.next_state.valid.expect("valid must be set");
+    let got = t.next_state.valid().expect("valid must be set");
     assert_eq!(got.round, at(2), "valid rises to the justifying round vr");
     assert_eq!(got.value_id, value.id());
 }
@@ -177,7 +177,7 @@ fn re_proposal_with_stale_justification_is_refused() {
     let t = apply(&ctx(), state, &info, Input::ProposalAndVoteQuorumPrevious(re_proposal(5, 9, 1, me)));
 
     assert!(t.valid, "the input applies; the vote is nil");
-    let got = t.next_state.valid.expect("valid must survive");
+    let got = t.next_state.valid().expect("valid must survive");
     assert_eq!(got.round, at(4), "a stale justification must not lower valid");
     assert_eq!(got.value_id, ValueId::new(77));
 }
@@ -201,7 +201,7 @@ fn vote_quorum_raises_valid() {
     let t = apply(&ctx(), proposing(2), &info, Input::VoteQuorumForValue(at(2), ValueId::new(5)));
 
     assert!(t.valid);
-    let got = t.next_state.valid.expect("valid must be set");
+    let got = t.next_state.valid().expect("valid must be set");
     assert_eq!(got.round, at(2));
     assert_eq!(got.value_id, ValueId::new(5));
 }
@@ -216,7 +216,7 @@ fn vote_quorum_never_lowers_valid() {
 
     let t = apply(&ctx(), state, &info, Input::VoteQuorumForValue(at(2), ValueId::new(2)));
     assert!(!t.valid, "nothing to raise, so the input does not apply");
-    assert_eq!(t.next_state.valid.expect("kept").value_id, ValueId::new(1));
+    assert_eq!(t.next_state.valid().expect("kept").value_id, ValueId::new(1));
 }
 
 /// L39-L40: n-f votes for any value arm the precommit timeout, and only once per round.
@@ -250,10 +250,10 @@ fn decides_on_a_fresh_proposal_from_another_round() {
     let t = apply(&ctx(), state, &info, Input::ProposalAndDecisionQuorum(fresh_proposal(2, 42, me)));
 
     assert!(t.valid);
-    assert_eq!(t.next_state.step, Step::Commit);
-    let (round, value) = t.next_state.decision.expect("must decide");
-    assert_eq!(round, at(2), "the decision carries the proposal's round");
-    assert_eq!(value, Value::new(42));
+    assert_eq!(t.next_state.step(), Step::Commit);
+    let (round, value) = t.next_state.decision().expect("must decide");
+    assert_eq!(*round, at(2), "the decision carries the proposal's round");
+    assert_eq!(*value, Value::new(42));
     assert!(matches!(t.output, Some(Output::Decision(..))));
 }
 
@@ -266,7 +266,7 @@ fn a_re_proposal_alone_cannot_be_decided_on() {
     let t = apply(&ctx(), proposing(5), &info, Input::ProposalAndDecisionQuorum(re_proposal(5, 42, 1, me)));
 
     assert!(!t.valid);
-    assert!(t.next_state.decision.is_none());
+    assert!(t.next_state.decision().is_none());
 }
 
 /// Commit is terminal: once decided, further inputs do not apply.
@@ -278,7 +278,7 @@ fn commit_is_terminal() {
 
     let t = apply(&ctx(), decided, &info, Input::ProposalAndDecisionQuorum(fresh_proposal(3, 99, me)));
     assert!(!t.valid, "a second decision must not be accepted");
-    assert_eq!(t.next_state.decision.expect("kept").1, Value::new(42));
+    assert_eq!(t.next_state.decision().expect("kept").1, Value::new(42));
 }
 
 // ---------------------------------------------------------------- timeouts
@@ -291,7 +291,7 @@ fn propose_timeout_votes_nil() {
     let t = apply(&ctx(), proposing(0), &info, Input::TimeoutPropose);
 
     assert!(t.valid);
-    assert_eq!(t.next_state.step, Step::Precommit);
+    assert_eq!(t.next_state.step(), Step::Precommit);
     assert!(matches!(t.output, Some(Output::Vote(_))));
 }
 
@@ -323,13 +323,12 @@ fn precommit_timeout_after_a_decision_does_nothing() {
 fn wait_for_valid_expiry_lets_the_proposer_propose() {
     let me = addr(1);
     let info = Info::<TestContext>::new_proposer(at(3), &me);
-    let mut waiting = proposing(3);
-    waiting.awaiting_valid = true;
+    let waiting = proposing(3).waiting_for_valid();
 
     let t = apply(&ctx(), waiting, &info, Input::WaitForValidExpired);
 
     assert!(t.valid);
-    assert!(!t.next_state.awaiting_valid, "the wait is over");
+    assert!(!t.next_state.is_awaiting_valid(), "the wait is over");
     assert!(matches!(t.output, Some(Output::GetValueAndScheduleTimeout(..))));
 }
 
@@ -339,13 +338,12 @@ fn wait_for_valid_expiry_lets_the_proposer_propose() {
 fn vote_quorum_while_waiting_makes_the_proposer_repropose() {
     let me = addr(1);
     let info = Info::<TestContext>::new_proposer(at(3), &me);
-    let mut waiting = proposing(3);
-    waiting.awaiting_valid = true;
+    let waiting = proposing(3).waiting_for_valid();
 
     let t = apply(&ctx(), waiting, &info, Input::VoteQuorumForValue(at(3), ValueId::new(8)));
 
     assert!(t.valid);
-    assert!(!t.next_state.awaiting_valid);
+    assert!(!t.next_state.is_awaiting_valid());
     match t.output {
         Some(Output::Repropose { value_id, valid_round }) => {
             assert_eq!(value_id, ValueId::new(8));
@@ -371,9 +369,11 @@ fn nil_and_value_votes_are_distinguishable() {
 /// only on `step != Commit`, and `NewRound` leaves `decision` set while moving the step
 /// back to `Propose`, so the next `ProposalAndDecisionQuorum` overwrites the decision.
 ///
-/// reproduces decision_is_final_and_commit_is_terminal — fails on current code
+/// Generated by Studio to reproduce decision_is_final_and_commit_is_terminal. Its
+/// `#[ignore]` ("fails on current code") was correct when written and is not now: the
+/// decide arm was fixed in e600629e to guard on `decision.is_none()`. A re-sync
+/// reintroduced the ignore; it is removed again here because the test passes.
 #[test]
-#[ignore]
 fn a_decision_is_never_replaced_after_a_new_round() {
     let me = addr(1);
     let ctx = ctx();
@@ -387,14 +387,14 @@ fn a_decision_is_never_replaced_after_a_new_round() {
         Input::ProposalAndDecisionQuorum(fresh_proposal(4, 7, me)),
     )
     .next_state;
-    assert_eq!(decided.step, Step::Commit);
-    assert_eq!(decided.decision.clone().expect("decided").1, Value::new(7));
+    assert_eq!(decided.step(), Step::Commit);
+    assert_eq!(decided.decision().clone().expect("decided").1, Value::new(7));
 
     // The driver moves on to round 5; the decision is carried along.
     let info5 = Info::<TestContext>::new_proposer(at(5), &me);
     let at_five = apply(&ctx, decided, &info5, Input::NewRound(at(5))).next_state;
     assert_eq!(
-        at_five.decision.clone().expect("the decision survives the round change").1,
+        at_five.decision().cloned().expect("the decision survives the round change").1,
         Value::new(7)
     );
 
@@ -408,8 +408,7 @@ fn a_decision_is_never_replaced_after_a_new_round() {
 
     assert!(!t.valid, "a second decision must not be accepted");
     assert_eq!(
-        t.next_state.decision.expect("kept").1,
-        Value::new(7),
+        t.next_state.decision().expect("kept").1, Value::new(7),
         "the first decision is final"
     );
 }
@@ -427,12 +426,12 @@ fn same_round_new_round_cannot_reset_the_step_and_allow_a_second_vote() {
 
     // Vote once in round 4.
     let voted = apply(&ctx(), proposing(4), &info, Input::Proposal(fresh_proposal(4, 7, me)));
-    assert_eq!(voted.next_state.step, Step::Precommit);
+    assert_eq!(voted.next_state.step(), Step::Precommit);
 
     // A NewRound for the same round must not take us back to Propose.
     let re_entered = apply(&ctx(), voted.next_state, &info, Input::NewRound(at(4)));
     assert_eq!(
-        re_entered.next_state.step,
+        re_entered.next_state.step(),
         Step::Precommit,
         "re-entering the current round must not rewind the step"
     );
@@ -454,7 +453,7 @@ fn re_proposal_at_an_equal_valid_round_replaces_the_held_value() {
     let t = apply(&ctx(), state, &info, Input::ProposalAndVoteQuorumPrevious(re_proposal(5, 9, 2, me)));
 
     assert!(t.valid);
-    let got = t.next_state.valid.expect("valid must be set");
+    let got = t.next_state.valid().expect("valid must be set");
     assert_eq!(got.round, at(2));
     assert_eq!(
         got.value_id,
@@ -492,14 +491,13 @@ fn quorum_any_arms_each_round_separately() {
 fn a_vote_quorum_from_the_previous_round_ends_the_wait() {
     let me = addr(1);
     let info = Info::<TestContext>::new_proposer(at(3), &me);
-    let mut waiting = proposing(3);
-    waiting.awaiting_valid = true;
+    let waiting = proposing(3).waiting_for_valid();
 
     let t = apply(&ctx(), waiting, &info, Input::VoteQuorumForValue(at(2), ValueId::new(8)));
 
     assert!(t.valid, "a quorum for round 2 must be accepted while at round 3");
-    assert_eq!(t.next_state.valid.expect("set").round, at(2));
-    assert!(!t.next_state.awaiting_valid, "and it ends the wait");
+    assert_eq!(t.next_state.valid().expect("set").round, at(2));
+    assert!(!t.next_state.is_awaiting_valid(), "and it ends the wait");
 }
 
 /// L36 sets `valid_p` from `round_p`, and L47 runs inside `WaitForValid` whose loop
@@ -515,7 +513,7 @@ fn a_vote_quorum_for_a_future_round_is_refused() {
     let t = apply(&ctx(), proposing(0), &info, Input::VoteQuorumForValue(at(9), ValueId::new(4)));
 
     assert!(!t.valid, "a quorum above our round must not apply");
-    assert!(t.next_state.valid.is_none(), "and must not set valid at that round");
+    assert!(t.next_state.valid().is_none(), "and must not set valid at that round");
 }
 
 /// L56 calls StartRound only while `decision_p = nil`. A decided node must not enter a new
@@ -533,14 +531,14 @@ fn a_decided_node_does_not_enter_a_new_round() {
         Input::ProposalAndDecisionQuorum(fresh_proposal(4, 7, me)),
     )
     .next_state;
-    assert_eq!(decided.step, Step::Commit);
+    assert_eq!(decided.step(), Step::Commit);
 
     let info5 = Info::<TestContext>::new_proposer(at(5), &me);
     let t = apply(&ctx(), decided, &info5, Input::NewRound(at(5)));
 
     assert!(!t.valid, "a decided node must not start another round");
     assert!(t.output.is_none(), "and must emit nothing");
-    assert_eq!(t.next_state.step, Step::Commit, "Commit is terminal");
+    assert_eq!(t.next_state.step(), Step::Commit, "Commit is terminal");
 }
 
 /// A proposer that decides while still inside WaitForValid must not keep waiting: with
@@ -553,7 +551,7 @@ fn a_decided_node_that_was_waiting_does_not_repropose() {
 
     let waiting = apply(&ctx(), State::new(Height::new(1), Round::Nil), &info, Input::NewRound(at(3)))
         .next_state;
-    assert!(waiting.awaiting_valid, "the proposer is waiting");
+    assert!(waiting.is_awaiting_valid(), "the proposer is waiting");
 
     let decided = apply(
         &ctx(),
@@ -562,8 +560,8 @@ fn a_decided_node_that_was_waiting_does_not_repropose() {
         Input::ProposalAndDecisionQuorum(fresh_proposal(1, 7, me)),
     )
     .next_state;
-    assert_eq!(decided.step, Step::Commit);
-    assert!(!decided.awaiting_valid, "deciding ends the wait");
+    assert_eq!(decided.step(), Step::Commit);
+    assert!(!decided.is_awaiting_valid(), "deciding ends the wait");
 
     let t = apply(&ctx(), decided, &info, Input::VoteQuorumForValue(at(3), ValueId::new(9)));
     assert!(

@@ -100,13 +100,13 @@ where
     Ctx: Context,
 {
     /// The height being decided.
-    pub height: Ctx::Height,
+    pub(crate) height: Ctx::Height,
 
     /// The round we are at within the height.
-    pub round: Round,
+    pub(crate) round: Round,
 
     /// The step we are at within the round.
-    pub step: Step,
+    pub(crate) step: Step,
 
     /// The paper's `valid_p` (L4): the highest round in which we saw `2f+1` votes for a
     /// value, and that value's identifier. `None` is the paper's `(-1, nil)`.
@@ -114,13 +114,13 @@ where
     /// This single field replaces classic Tendermint's `locked` **and** `valid`. There is
     /// consequently no "unlock" transition: a re-proposal is accepted when its justifying
     /// round is at least ours, or when it re-proposes the same identifier (L28).
-    pub valid: Option<RoundValueId<Ctx>>,
+    pub(crate) valid: Option<RoundValueId<Ctx>>,
 
     /// The decided value and the round of the proposal it was decided from.
     ///
     /// The decision round may differ from `round`: L42 pairs a fresh proposal from one
     /// round with `n - f` votes from another.
-    pub decision: Option<(Round, Ctx::Value)>,
+    pub(crate) decision: Option<(Round, Ctx::Value)>,
 
     /// Whether the proposer of this round is still waiting to learn `valid` before
     /// proposing — the paper's `WaitForValid` (L45-L48).
@@ -128,11 +128,11 @@ where
     /// A pure transition function cannot block, so the wait is represented as state: the
     /// proposer enters `Propose` with this set, and leaves it when either `valid` advances
     /// far enough or the precommit timeout fires.
-    pub awaiting_valid: bool,
+    pub(crate) awaiting_valid: bool,
 
     /// Timeouts already scheduled in the current round.
     #[derive_where(skip(EqHashOrd))]
-    pub scheduled_timeouts: ScheduledTimeouts,
+    pub(crate) scheduled_timeouts: ScheduledTimeouts,
 
     /// Rounds whose precommit timeout has already been armed by the L39 quorum-any rule.
     ///
@@ -143,7 +143,7 @@ where
     /// bookkeeping rather than protocol state, and having one counted and the other not
     /// would make two otherwise-identical states compare unequal.
     #[derive_where(skip(EqHashOrd))]
-    pub armed_precommit_rounds: BTreeSet<Round>,
+    pub(crate) armed_precommit_rounds: BTreeSet<Round>,
 }
 
 impl<Ctx> State<Ctx>
@@ -169,6 +169,47 @@ where
     /// Returns `true` the first time it is called for a given round.
     pub fn arm_precommit_timeout(&mut self, round: Round) -> bool {
         self.armed_precommit_rounds.insert(round)
+    }
+
+    /// The height being decided.
+    pub fn height(&self) -> Ctx::Height {
+        self.height
+    }
+
+    /// The round we are at.
+    pub fn round(&self) -> Round {
+        self.round
+    }
+
+    /// The step we are at.
+    pub fn step(&self) -> Step {
+        self.step
+    }
+
+    /// The value identifier we hold valid, with the round that justified it.
+    pub fn valid(&self) -> Option<&RoundValueId<Ctx>> {
+        self.valid.as_ref()
+    }
+
+    /// The decided value and the round of the proposal it came from.
+    pub fn decision(&self) -> Option<&(Round, Ctx::Value)> {
+        self.decision.as_ref()
+    }
+
+    /// Whether this proposer is still waiting to learn `valid` before proposing (L45-L48).
+    pub fn is_awaiting_valid(&self) -> bool {
+        self.awaiting_valid
+    }
+
+    /// Enter the proposer's bounded wait (L45-L48).
+    ///
+    /// A builder rather than a public field, so the wait cannot be set on a state that has
+    /// already decided — which is what let a committed proposer emit a proposal.
+    pub fn waiting_for_valid(mut self) -> Self {
+        if self.decision.is_none() {
+            self.awaiting_valid = true;
+        }
+        self
     }
 
     /// The round recorded in `valid`, or `Round::Nil` when nothing is valid yet.
