@@ -50,7 +50,7 @@ fn both_thresholds_fire_for_one_round_in_order() {
 
     // Third vote: 2f+1 for the value.
     let third = k.apply_vote(vote_for(0, val(7), a[2]));
-    assert_eq!(third, vec![Output::VoteQuorumValue(ValueId::new(7))]);
+    assert_eq!(third, vec![Output::VoteQuorumValue(Round::new(0), ValueId::new(7))]);
 
     assert!(k.apply_vote(vote_for(0, val(7), a[3])).is_empty());
 
@@ -59,7 +59,7 @@ fn both_thresholds_fire_for_one_round_in_order() {
     let fifth = k.apply_vote(vote_for(0, val(7), a[4]));
     assert_eq!(
         fifth,
-        vec![Output::DecisionQuorumValue(ValueId::new(7)), Output::QuorumAny]
+        vec![Output::DecisionQuorumValue(Round::new(0), ValueId::new(7)), Output::QuorumAny(Round::new(0))]
     );
 }
 
@@ -76,9 +76,9 @@ fn a_single_vote_can_cross_both_thresholds_at_once() {
     assert_eq!(
         out,
         vec![
-            Output::VoteQuorumValue(ValueId::new(1)),
-            Output::DecisionQuorumValue(ValueId::new(1)),
-            Output::QuorumAny
+            Output::VoteQuorumValue(Round::new(0), ValueId::new(1)),
+            Output::DecisionQuorumValue(Round::new(0), ValueId::new(1)),
+            Output::QuorumAny(Round::new(0))
         ],
         "one vote takes the tally from 4 to 9, crossing 2f+1 and n-f together"
     );
@@ -106,7 +106,7 @@ fn exactly_at_a_threshold_is_not_met() {
     assert!(!k.has_vote_quorum(Round::new(0), &ValueId::new(3)));
 
     let over = k.apply_vote(vote_for(0, val(3), a[2]));
-    assert_eq!(over, vec![Output::VoteQuorumValue(ValueId::new(3))]);
+    assert_eq!(over, vec![Output::VoteQuorumValue(Round::new(0), ValueId::new(3))]);
 
     k.apply_vote(vote_for(0, val(3), a[3]));
     assert!(!k.has_decision_quorum(Round::new(0), &ValueId::new(3)), "4 of 5 is exactly 4/5");
@@ -126,7 +126,7 @@ fn nil_votes_count_for_quorum_any_but_never_for_a_value() {
         assert!(k.apply_vote(vote_for(0, NilOrVal::Nil, a[i])).is_empty());
     }
     let fifth = k.apply_vote(vote_for(0, NilOrVal::Nil, a[4]));
-    assert_eq!(fifth, vec![Output::QuorumAny], "nil reaches n-f for any, and nothing else");
+    assert_eq!(fifth, vec![Output::QuorumAny(Round::new(0))], "nil reaches n-f for any, and nothing else");
 }
 
 /// A quorum split across different values reaches quorum-any and no value threshold.
@@ -140,7 +140,7 @@ fn a_split_quorum_reaches_only_quorum_any() {
     k.apply_vote(vote_for(0, val(1), a[3]));
     let fifth = k.apply_vote(vote_for(0, val(2), a[4]));
 
-    assert_eq!(fifth, vec![Output::QuorumAny]);
+    assert_eq!(fifth, vec![Output::QuorumAny(Round::new(0))]);
     assert!(!k.has_vote_quorum(Round::new(0), &ValueId::new(1)));
 }
 
@@ -160,7 +160,8 @@ fn future_round_votes_never_produce_a_skip() {
     // Only the round's own 2f+1 reports anything.
     assert_eq!(
         k.apply_vote(vote_for(9, val(1), a[2])),
-        vec![Output::VoteQuorumValue(ValueId::new(1))]
+        vec![Output::VoteQuorumValue(Round::new(9), ValueId::new(1))],
+        "the output carries the round it is for, which the consumer must check"
     );
 }
 
@@ -214,7 +215,6 @@ fn pruning_drops_rounds_and_keeps_evidence() {
 
     k.prune_votes(Round::new(5));
 
-    assert!(!k.has_vote_quorum(Round::new(0), &ValueId::new(1)), "round 0 is gone");
     assert!(k.has_vote_quorum(Round::new(5), &ValueId::new(9)), "round 5 survives");
     assert_eq!(k.evidence().len(), 1, "evidence is never pruned");
 }
@@ -248,4 +248,60 @@ fn a_prevote_is_never_tallied() {
     // And a precommit from a validator that already prevoted is NOT equivocation.
     assert!(k.apply_vote(vote_for(0, val(9), a[0])).is_empty());
     assert_eq!(k.evidence().len(), 0, "a prevote/precommit pair is not a double vote");
+}
+
+/// L27 verifies a re-proposal against `2f+1` votes from an EARLIER round, and L42's
+/// decision quorum may come from a different round than the proposal. Pruning the tallies
+/// must not destroy the answer to either question.
+#[test]
+fn pruning_keeps_the_cross_round_justification() {
+    let (a, mut k) = setup([1, 1, 1, 1, 1, 1]);
+
+    for i in 0..5 {
+        k.apply_vote(vote_for(2, val(9), a[i]));
+    }
+    assert!(k.has_vote_quorum(Round::new(2), &ValueId::new(9)));
+    assert!(k.has_decision_quorum(Round::new(2), &ValueId::new(9)));
+
+    k.prune_votes(Round::new(7));
+
+    assert!(
+        k.has_vote_quorum(Round::new(2), &ValueId::new(9)),
+        "the 2f+1 justification L27 needs must survive pruning"
+    );
+    assert!(
+        k.has_decision_quorum(Round::new(2), &ValueId::new(9)),
+        "and so must the cross-round n-f quorum L42 may decide on"
+    );
+}
+
+/// A pruned round must not re-report its thresholds if its votes arrive again through
+/// sync or WAL replay.
+#[test]
+fn a_pruned_round_does_not_report_its_thresholds_twice() {
+    let (a, mut k) = setup([1, 1, 1, 1, 1, 1]);
+
+    for i in 0..3 {
+        k.apply_vote(vote_for(1, val(4), a[i]));
+    }
+    k.prune_votes(Round::new(6));
+
+    for i in 0..3 {
+        assert!(
+            k.apply_vote(vote_for(1, val(4), a[i])).is_empty(),
+            "a replayed vote for a pruned round reports nothing"
+        );
+    }
+}
+
+/// Algorithm 1 defines no vote at an undefined round.
+#[test]
+fn a_vote_at_an_undefined_round_is_discarded() {
+    let (a, mut k) = setup([1, 1, 1]);
+    let nil_round = SignedVote::new(
+        Vote::new_precommit(Height::new(1), Round::Nil, val(1), a[0]),
+        Signature::test(),
+    );
+    assert!(k.apply_vote(nil_round).is_empty());
+    assert!(!k.has_vote_quorum(Round::Nil, &ValueId::new(1)));
 }

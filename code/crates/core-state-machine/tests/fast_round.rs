@@ -501,3 +501,73 @@ fn a_vote_quorum_from_the_previous_round_ends_the_wait() {
     assert_eq!(t.next_state.valid.expect("set").round, at(2));
     assert!(!t.next_state.awaiting_valid, "and it ends the wait");
 }
+
+/// L36 sets `valid_p` from `round_p`, and L47 runs inside `WaitForValid` whose loop
+/// condition bounds the quorum round BELOW `round_p`. Neither lets `valid_p.round` exceed
+/// the round we are at — "the observation rule needs to capture valid values before a
+/// process moves to a higher round". A quorum for a far-future round must be refused, or
+/// the node holds valid at that round and votes nil in every round up to it.
+#[test]
+fn a_vote_quorum_for_a_future_round_is_refused() {
+    let me = addr(1);
+    let info = Info::<TestContext>::new_proposer(at(0), &me);
+
+    let t = apply(&ctx(), proposing(0), &info, Input::VoteQuorumForValue(at(9), ValueId::new(4)));
+
+    assert!(!t.valid, "a quorum above our round must not apply");
+    assert!(t.next_state.valid.is_none(), "and must not set valid at that round");
+}
+
+/// L56 calls StartRound only while `decision_p = nil`. A decided node must not enter a new
+/// round: `with_step` refuses to leave Commit, but without a decision guard `update_round`
+/// still advanced and `start_round` ran, so the node scheduled timeouts and emitted
+/// proposals after deciding.
+#[test]
+fn a_decided_node_does_not_enter_a_new_round() {
+    let me = addr(1);
+    let info4 = Info::<TestContext>::new_proposer(at(4), &me);
+    let decided = apply(
+        &ctx(),
+        proposing(4),
+        &info4,
+        Input::ProposalAndDecisionQuorum(fresh_proposal(4, 7, me)),
+    )
+    .next_state;
+    assert_eq!(decided.step, Step::Commit);
+
+    let info5 = Info::<TestContext>::new_proposer(at(5), &me);
+    let t = apply(&ctx(), decided, &info5, Input::NewRound(at(5)));
+
+    assert!(!t.valid, "a decided node must not start another round");
+    assert!(t.output.is_none(), "and must emit nothing");
+    assert_eq!(t.next_state.step, Step::Commit, "Commit is terminal");
+}
+
+/// A proposer that decides while still inside WaitForValid must not keep waiting: with
+/// `awaiting_valid` left set, a later vote quorum drove propose_now and emitted a proposal
+/// from a committed state.
+#[test]
+fn a_decided_node_that_was_waiting_does_not_repropose() {
+    let me = addr(1);
+    let info = Info::<TestContext>::new_proposer(at(3), &me);
+
+    let waiting = apply(&ctx(), State::new(Height::new(1), Round::Nil), &info, Input::NewRound(at(3)))
+        .next_state;
+    assert!(waiting.awaiting_valid, "the proposer is waiting");
+
+    let decided = apply(
+        &ctx(),
+        waiting,
+        &info,
+        Input::ProposalAndDecisionQuorum(fresh_proposal(1, 7, me)),
+    )
+    .next_state;
+    assert_eq!(decided.step, Step::Commit);
+    assert!(!decided.awaiting_valid, "deciding ends the wait");
+
+    let t = apply(&ctx(), decided, &info, Input::VoteQuorumForValue(at(3), ValueId::new(9)));
+    assert!(
+        !matches!(t.output, Some(Output::Repropose { .. })),
+        "a committed node must never emit a proposal"
+    );
+}

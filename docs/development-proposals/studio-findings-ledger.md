@@ -29,6 +29,9 @@ independent reviewer, not by Studio or by the tests.
 | F-22d | `WaitForValid` unimplementable; every wait burned its full timeout | reviewer | medium (liveness) | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-25 | `State` invariants bypassable through public mutators | Studio (model read) | high | `85d486e2` | `99c8468c` | **fixed**, partially — fields still `pub` |
 | F-26 | Three of four "property violations" were MODEL defects, not code | Studio (self-diagnosis) | — | `7dbe76b6` | four spec fixes **offered**, need the desktop | open |
+| F-27a | My F-22d fix over-widened: a quorum for a FUTURE round set `valid` there, locking the node to nil votes | reviewer (round 2) | high | `51c77153` | next commit | **fixed** |
+| F-27b | `Commit` not terminal — a decided node scheduled timeouts and emitted proposals | reviewer (round 2) | medium-high | `51c77153` | next commit | **fixed** |
+| F-27c | Keeper: outputs lacked their round; `prune_votes` destroyed L27/L42 justification and reset latches; `Round::Nil` tallied; no params ordering check | reviewer (round 2) | medium | `51c77153` | next commit | **fixed** |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -567,6 +570,79 @@ Studio diagnosed its own specs precisely, cited the exact line and counterexampl
 each, and said plainly "not a code defect" rather than leaving me to assume the code was at
 fault. But it does mean a raw violation count is a bad metric, and I should not have
 reported one as though it were a bug count.
+
+## F-27 — Second review round: I introduced a bug fixing the first one
+
+- **Found against:** `51c77153` · **Fixed in:** the commit that follows it · **Source:**
+  independent reviewer, second round (resumed with round-one context)
+- The reviewer re-read the five fixes from F-22 and cleared three of them explicitly, so
+  the confirmations are as informative as the defects.
+
+### F-27a — DEFINITE/High. My own fix over-widened `VoteQuorumForValue`
+Fixing F-22d I removed the `this_round` gate entirely, leaving no relation between the
+quorum's round and ours. But L36 sets `valid_p` from `round_p`, and L47 runs inside
+`WaitForValid` whose loop condition `valid_p.round < round_p - 1` bounds `r` **below**
+`round_p`. Neither line lets `valid_p.round` exceed `round_p` — the paper's core
+restriction, that the observation rule captures valid values *before* a process moves up.
+
+With the gate gone, `VoteQuorumForValue(round 9, v)` at round 0 sets `valid = (9, v)`. The
+node then votes **nil in every round up to 9** (L21 fails, and L28's `valid_round() <= vr`
+is impossible), and re-proposes with `vr > round_p`, which every receiver rejects as
+malformed. A self-inflicted lock.
+
+**Reachable, not hypothetical:** `FastVoteKeeper::apply_vote` emits its quorum output for
+any round, and the keeper's own test `future_round_votes_never_produce_a_skip` asserts a
+round-9 quorum is reported to a node at round 0. **The keeper manufactures the input that
+breaks the state machine.** **Fixed:** the arm now guards `quorum_round <= state.round`.
+
+### F-27b — DEFINITE/Medium-High. `Commit` was not terminal: a decided node emitted proposals
+Two paths, both pre-existing rather than introduced, and neither covered by F-24/F-25 which
+concern the decided *value*:
+1. The decide arm never cleared `awaiting_valid`, so a proposer that decided mid-wait still
+   had it set; a later vote quorum drove `propose_now` and emitted `Repropose` **from a
+   committed state**.
+2. `(_, Input::NewRound(round)) if state.round < round` matched in `Commit`. `with_step`
+   correctly refused to leave Commit, but `update_round` still advanced the round and
+   `start_round` ran to completion — scheduling timeouts and emitting proposals after
+   deciding. L56 makes `decision_p = nil` the *reason* StartRound is not called.
+
+**Fixed:** the decide arm clears `awaiting_valid`, and both `NewRound` arms require
+`state.decision.is_none()`.
+
+### F-27c — Vote keeper hardening (all LIKELY, all fixed)
+- **Outputs now carry their round.** After F-27a the round is safety-load-bearing, yet the
+  consumer had to re-derive it from the vote it passed in. Making a caller reconstruct
+  safety-relevant data is how a check gets skipped.
+- **`prune_votes` destroyed the cross-round justification.** `has_vote_quorum` and
+  `has_decision_quorum` read the live tally, which pruning deleted — but L27 verifies a
+  re-proposal against `2f+1` from an *earlier* round and L42's decision quorum may come
+  from a different round than the proposal. In classic Tendermint pruning below the current
+  round is safe; here it is not. **Fixed:** a `reached` record, separate from the tallies,
+  that pruning does not touch.
+- **A pruned round could re-report.** `entry(round).or_default()` recreated empty latches,
+  so replayed votes fired the thresholds again. The same `reached` record fixes it.
+- **`Round::Nil` was tallied.** Algorithm 1 defines no vote at an undefined round.
+- **No ordering check on `FastThresholdParams`.** Swapped params would silently invert L36
+  and L42. Now a `debug_assert`.
+
+### Confirmed correct by the same review
+- **Fix 2 (the `≤` write) is sound.** The direct write bypassing `set_valid`'s monotonicity
+  guard is reached only when `valid_round() <= vr`, and `vr` is already proven
+  `is_defined() && vr < state.round`, so the round component stays monotone and only the
+  value is replaced — exactly L29-L30.
+- **The keeper's two-thresholds-on-one-tally logic is correct.** `&&` short-circuits so
+  nothing latches prematurely; `decision` implies `quorum`, so a decision output can never
+  precede its vote-quorum output; two disjoint `2f+1` quorums in one round are both
+  reported, and the state machine correctly ignores the second because L36 requires
+  `round_p > valid_p.round` — the asymmetry with L29-L30's `≤` is deliberate on both sides.
+- Fixes 1, 3 and 5 faithful as written.
+
+### Open item 1 escalated
+`armed_precommit_rounds` was a new **public mutable** field whose emptiness is an L39
+safety latch, and unlike `scheduled_timeouts` it was not excluded from equality — so two
+otherwise-identical states compared unequal. **The equality inconsistency is fixed**; the
+underlying issue stands: with `step`, `valid` and `decision` private, F-27a and F-27b would
+both have been unreachable by construction. That is now the highest-leverage open item.
 
 ---
 

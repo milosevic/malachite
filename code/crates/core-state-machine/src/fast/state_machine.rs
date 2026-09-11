@@ -111,6 +111,18 @@ where
     };
     let oracle_sawaiting = state.awaiting_valid;
     let oracle_sscheduled = i64::from(state.scheduled_timeouts.bits());
+    // `armed_precommit_rounds` travels as a bitmask over the model's round band:
+    // bit 0 is round -1, bit i+1 is round i, for i in 0..=5. A round armed
+    // outside the band is not represented, which fails replay loudly rather than
+    // passing wrongly.
+    let oracle_sarmed = state
+        .armed_precommit_rounds
+        .iter()
+        .filter_map(|r| {
+            let i = r.as_i64();
+            (-1..=5).contains(&i).then(|| 1_i64 << (i + 1))
+        })
+        .sum::<i64>();
     let (oracle_tag, oracle_value, oracle_pround, oracle_ppol, oracle_nround) = if oracle_on {
         match &input {
             Input::NewRound(round) => ("NewRound", None, None, None, Some(round.as_i64())),
@@ -193,6 +205,7 @@ where
             .argument("sdvalue", oracle_sdvalue.as_str(), Some("VALUES"))
             .argument("sawaiting", oracle_sawaiting, None)
             .argument("sscheduled", oracle_sscheduled, None)
+            .argument("sarmed", oracle_sarmed, None)
             // Conformance fact: whether the transition table accepted the input.
             // The absolute round is deliberately NOT asserted — `apply` is also
             // called on caller-built states, whose round the model has no logged
@@ -225,10 +238,18 @@ where
         // StartRound(round+1), so re-entering the round we are already in never happens.
         // Without it, a NewRound for the current round resets Precommit back to Propose
         // and the node can cast a SECOND vote in that round — equivocating against itself.
-        (Step::Unstarted, Input::NewRound(round)) if state.round <= round => {
+        (Step::Unstarted, Input::NewRound(round))
+            if state.round <= round && state.decision.is_none() =>
+        {
             start_round(state, info, round)
         }
-        (_, Input::NewRound(round)) if state.round < round => start_round(state, info, round),
+        // L56 calls StartRound only while `decision_p = nil`. Without the decision guard a
+        // decided node keeps entering rounds: `with_step` correctly refuses to leave
+        // Commit, but `update_round` still advances and `start_round` runs to completion,
+        // so the node schedules timeouts and emits proposals after deciding.
+        (_, Input::NewRound(round)) if state.round < round && state.decision.is_none() => {
+            start_round(state, info, round)
+        }
 
         // L13/L16: the application produced a value and we are the proposer, no longer
         // waiting. `valid` is nil here, so the proposal is fresh and carries validRound -1.
@@ -296,7 +317,15 @@ where
         // because a proposer inside WaitForValid is at round_p while the quorum that ends
         // its wait is for round_p - 1 (L46) — gating on the current round would make L47
         // unreachable and force every wait to burn its full timeout.
-        (_, Input::VoteQuorumForValue(quorum_round, value_id)) => {
+        (_, Input::VoteQuorumForValue(quorum_round, value_id))
+            if quorum_round <= state.round =>
+        {
+            // The upper bound is the paper's core restriction: the observation rule must
+            // capture valid values BEFORE a process moves to a higher round. L36 sets
+            // valid_p from round_p, and L47 runs inside WaitForValid whose loop condition
+            // (valid_p.round < round_p - 1) bounds r below round_p. Neither lets valid_p
+            // exceed round_p. Without this, a quorum for a far-future round sets valid
+            // there and the node votes nil in every round up to it — a self-inflicted lock.
             let raised = state.valid_round() < quorum_round;
             state = state.set_valid(quorum_round, value_id);
 
@@ -339,6 +368,10 @@ where
             }
             let round = proposal.round();
             let value = proposal.value().clone();
+            // Clearing the wait matters: a proposer that decided while still waiting would
+            // otherwise have `awaiting_valid` set, and a later vote quorum would drive
+            // propose_now — emitting a proposal from a committed state.
+            state.awaiting_valid = false;
             let state = state.set_decision(round, value.clone()).with_step(Step::Commit);
             Transition::to(state).with_output(Output::Decision(round, value))
         }

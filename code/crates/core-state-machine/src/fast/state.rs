@@ -138,6 +138,11 @@ where
     ///
     /// Kept per round rather than in `scheduled_timeouts`, because L39 arms the timeout
     /// for the QUORUM's round, which may be above the round we are at.
+    ///
+    /// Excluded from equality and ordering, like `scheduled_timeouts`: both are timeout
+    /// bookkeeping rather than protocol state, and having one counted and the other not
+    /// would make two otherwise-identical states compare unequal.
+    #[derive_where(skip(EqHashOrd))]
     pub armed_precommit_rounds: BTreeSet<Round>,
 }
 
