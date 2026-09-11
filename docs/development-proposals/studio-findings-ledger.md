@@ -276,14 +276,66 @@ Studio finding; that needs the owner. Statuses below are mine, not Studio's.
   speeds development up: the modelling, instrumentation and validation all ran fine.
 - **Status:** worth reporting upstream.
 
+## F-20 — **Studio's first finding on 5f+1 code**: dead suppression branch, and a latent double-schedule
+
+- **Anchor:** `85d486e2` (fast state machine + vote keeper, 32 tests passing)
+- **Component:** `fast-round-state-machine` (created by `survey_components` on 09-11)
+- **Found by:** the validation battery's reachability check, which reported the observation
+  `non_proposer_propose_timeout_suppressed` as **unreachable**. The worker deliberately
+  kept it rather than deleting it, on the grounds that it is dead code in the Rust and
+  belongs in an investigate verdict.
+- **Where:** `code/crates/core-state-machine/src/fast/state_machine.rs`, `start_round`
+
+```
+323:    state.update_round(round);                       // calls scheduled_timeouts.clear()
+328:    if state.check_timeout(TimeoutKind::Propose) {   // therefore always true
+329:        ... schedule the propose timeout
+330:    } else {                                         // UNREACHABLE
+```
+
+- **Confirmed behavior:** `update_round` clears the per-round timeout bits, and
+  `check_timeout` is called immediately afterwards, so it can never return false. The
+  suppression branch is dead.
+- **The latent part, which is worse than the dead code.** `apply` accepts
+  `Input::NewRound(r)` whenever `state.round <= r`, so **re-entering the same round is
+  allowed**. Each re-entry clears the timeout bits and schedules the propose timeout
+  again. The guard that exists to stop double-scheduling is defeated by the `clear()` that
+  precedes it. Worth checking whether the classic machine shares this shape — it has the
+  same `state.round <= round` guard and the same clearing `update_round`, and it carries a
+  **confirmed** property `timeout_scheduled_at_most_once_per_round`.
+- **Why this entry matters beyond the bug:** it is the first thing Studio has told us about
+  the 5f+1 implementation that we did not already believe. My 22 hand-written tests did not
+  catch it, which is exactly the blind spot predicted when tests and code share an author
+  and a reading of the paper (see the verification-gaps section).
+- **Status:** open, undecided. Two candidate fixes — drop the dead `else`, or stop clearing
+  timeouts when re-entering a round already in progress. The second is only correct if
+  re-entering the same round should be idempotent, which is a protocol question.
+
+## F-21 — Studio applied the anti-vacuity lesson unprompted
+
+- **Anchor:** `85d486e2`, at the `fast-round-state-machine` design gate
+- **Not a defect** — recorded because it is evidence about the process.
+- After I asked that properties be derived from the paper rather than the Rust, and noted
+  that three `equivocation-detection` properties had held vacuously (F-03), the worker
+  committed to **mutation testing**: every property carries "the single wrong write that
+  falsifies it", each is checked against a deliberately mutated copy of the model before
+  submission, and the design reports which ones actually failed.
+- It also declined to state any property over `awaiting_valid`, reasoning that such a
+  property "would test the representation, not the paper" — so the faithfulness of the
+  `WaitForValid` representation is recorded as the change's open question rather than
+  quietly assumed. That is the right call and it is the one part of the fast state machine
+  with no counterpart in the paper's structure.
+
 ---
 
 ## Open verification gaps (not findings, but worth tracking)
 
-- **The fast round state machine is verified by nothing but its own tests.** 22 pass at
-  `e237290b`, but they share an author and a reading of Algorithm 1 with the code. They
-  guard against regression, not against a shared misreading. No Quint model of the fast
-  protocol exists.
+- **The fast round state machine now has an independent model** (`fast-round-state-machine`,
+  created 09-11), whose properties are derived from Algorithm 1 rather than from the Rust.
+  It has already produced F-20, a defect the 22 hand-written tests missed. The model is not
+  yet through its first oracle run.
+- **The fast vote keeper is still verified only by its own 10 tests.** Its component
+  (`fast-vote-keeper`) exists but has not been set up.
 - **The fast module is not under the oracle.** `round-state-machine`'s test command is
   `-p arc-malachitebft-core-driver --test it`, which does not run
   `core-state-machine/tests/fast_round.rs`. Widening it is the concrete step to get the

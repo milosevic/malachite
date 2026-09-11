@@ -76,7 +76,7 @@ impl<'a, Ctx: Context> Info<'a, Ctx> {
 #[allow(clippy::needless_pass_by_value)]
 pub fn apply<Ctx>(
     ctx: &Ctx,
-    mut state: State<Ctx>,
+    state: State<Ctx>,
     info: &Info<Ctx>,
     input: Input<Ctx>,
 ) -> Transition<Ctx>
@@ -85,6 +85,141 @@ where
 {
     let this_round = state.round == info.input_round;
 
+    // Quint oracle: describe the input the way the spec models it — the
+    // constructor by name, plus the proposal / round fields it carries — before
+    // `input` is moved into the match below.
+    let oracle_on = quint_oracle::enabled();
+    let oracle_input_round = info.input_round.as_i64();
+    let oracle_state_round = state.round.as_i64();
+    let oracle_proposer = if info.is_proposer() { "a" } else { "b" };
+    // `apply` is a pure function of (state, info, input), and callers hand it
+    // states they built themselves, so the pre-state is part of the transition's
+    // payload, not something the model could track on its own. Log it whole.
+    let oracle_sstep = match state.step {
+        Step::Unstarted => "Unstarted",
+        Step::Propose => "Propose",
+        Step::Precommit => "Precommit",
+        Step::Commit => "Commit",
+    };
+    let (oracle_svround, oracle_svalue) = match &state.valid {
+        Some(rv) => (rv.round.as_i64(), alloc::format!("{}", rv.value_id)),
+        None => (-1, alloc::string::String::from("v")),
+    };
+    let (oracle_sdround, oracle_sdvalue) = match &state.decision {
+        Some((round, value)) => (round.as_i64(), alloc::format!("{}", value.id())),
+        None => (-1, alloc::string::String::from("v")),
+    };
+    let oracle_sawaiting = state.awaiting_valid;
+    let oracle_sscheduled = i64::from(state.scheduled_timeouts.bits());
+    let (oracle_tag, oracle_value, oracle_pround, oracle_ppol, oracle_nround) = if oracle_on {
+        match &input {
+            Input::NewRound(round) => ("NewRound", None, None, None, Some(round.as_i64())),
+            Input::ProposeValue(value) => (
+                "ProposeValue",
+                Some(alloc::format!("{}", value.id())),
+                None,
+                None,
+                None,
+            ),
+            Input::Proposal(proposal) => (
+                "Proposal",
+                Some(alloc::format!("{}", proposal.value().id())),
+                Some(proposal.round().as_i64()),
+                Some(proposal.pol_round().as_i64()),
+                None,
+            ),
+            Input::InvalidProposal => ("InvalidProposal", None, None, None, None),
+            Input::ProposalAndVoteQuorumPrevious(proposal) => (
+                "ProposalAndVoteQuorumPrevious",
+                Some(alloc::format!("{}", proposal.value().id())),
+                Some(proposal.round().as_i64()),
+                Some(proposal.pol_round().as_i64()),
+                None,
+            ),
+            Input::InvalidProposalAndVoteQuorumPrevious(proposal) => (
+                "InvalidProposalAndVoteQuorumPrevious",
+                Some(alloc::format!("{}", proposal.value().id())),
+                Some(proposal.round().as_i64()),
+                Some(proposal.pol_round().as_i64()),
+                None,
+            ),
+            Input::VoteQuorumForValue(value_id) => (
+                "VoteQuorumForValue",
+                Some(alloc::format!("{value_id}")),
+                None,
+                None,
+                None,
+            ),
+            Input::QuorumAny(round) => ("QuorumAny", None, None, None, Some(round.as_i64())),
+            Input::ProposalAndDecisionQuorum(proposal) => (
+                "ProposalAndDecisionQuorum",
+                Some(alloc::format!("{}", proposal.value().id())),
+                Some(proposal.round().as_i64()),
+                Some(proposal.pol_round().as_i64()),
+                None,
+            ),
+            Input::TimeoutPropose => ("TimeoutPropose", None, None, None, None),
+            Input::TimeoutPrecommit => ("TimeoutPrecommit", None, None, None, None),
+            Input::WaitForValidExpired => ("WaitForValidExpired", None, None, None, None),
+        }
+    } else {
+        ("", None, None, None, None)
+    };
+
+    let transition = apply_inner(ctx, state, info, input, this_round);
+
+    if oracle_on {
+        // Inputs that carry no proposal / no round leave those picks as
+        // don't-cares in the spec; pin them to values the spec always holds so
+        // replay never has to search them blind.
+        quint_oracle::Event::builder(quint_oracle::current_test(), "faststate_machineapply")
+            .argument("inputTag", oracle_tag, Some("ALL_TAGS"))
+            .argument("input_round", oracle_input_round, None)
+            .argument("proposer", oracle_proposer, Some("ADDRS"))
+            .argument(
+                "pvalue",
+                oracle_value.as_deref().unwrap_or("v"),
+                Some("VALUES"),
+            )
+            .argument("pround", oracle_pround.unwrap_or(oracle_state_round), None)
+            .argument("ppol", oracle_ppol.unwrap_or(-1), None)
+            .argument("nround", oracle_nround.unwrap_or(oracle_state_round), None)
+            // The pre-state `apply` was handed.
+            .argument("sround", oracle_state_round, None)
+            .argument("sstep", oracle_sstep, Some("STEP_NAMES"))
+            .argument("svround", oracle_svround, None)
+            .argument("svalue", oracle_svalue.as_str(), Some("VALUES"))
+            .argument("sdround", oracle_sdround, None)
+            .argument("sdvalue", oracle_sdvalue.as_str(), Some("VALUES"))
+            .argument("sawaiting", oracle_sawaiting, None)
+            .argument("sscheduled", oracle_sscheduled, None)
+            // Conformance fact: whether the transition table accepted the input.
+            // The absolute round is deliberately NOT asserted — `apply` is also
+            // called on caller-built states, whose round the model has no logged
+            // event to follow.
+            .assert(
+                alloc::vec::Vec::from([quint_oracle::PathSeg::ident("lastValid")]),
+                transition.valid,
+            )
+            .scope("fast-round-state-machine")
+            .send();
+    }
+
+    transition
+}
+
+/// The transition table itself, split out so `apply` can report the transition to
+/// the Quint oracle without the match arms having to know about it.
+fn apply_inner<Ctx>(
+    ctx: &Ctx,
+    mut state: State<Ctx>,
+    info: &Info<Ctx>,
+    input: Input<Ctx>,
+    this_round: bool,
+) -> Transition<Ctx>
+where
+    Ctx: Context,
+{
     match (state.step, input) {
         // L6-L18: start a round.
         (_, Input::NewRound(round)) if state.round <= round => start_round(state, info, round),

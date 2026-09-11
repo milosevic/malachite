@@ -57,6 +57,13 @@ impl ScheduledTimeouts {
         }
     }
 
+    /// The raw bits, for the Quint oracle instrumentation in
+    /// [`crate::fast::state_machine::apply`] — the model reconstructs the
+    /// per-round timeout set from them.
+    pub(crate) const fn bits(&self) -> u8 {
+        self.bits
+    }
+
     const fn mask(timeout: TimeoutKind) -> Option<u8> {
         match timeout {
             TimeoutKind::Propose => Some(Self::PROPOSE_BIT),

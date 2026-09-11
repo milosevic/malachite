@@ -1,7 +1,7 @@
 version = 1
 
 [survey]
-date = "2026-08-29T12:17:28Z"
+date = "2026-09-11T10:07:36Z"
 schema = 1
 
 [system]
@@ -4516,6 +4516,328 @@ wireConfirmed = false
 setupCompleted = false
 cardsDone = false
 
+[components.fast-round-state-machine]
+name = "Fast Tendermint Round State Machine"
+description = "The separate n>5f per-round algorithm (Unstarted → Propose → Precommit → Commit) with one voting step, a merged valid:(round, id) field, id-only re-proposals and the WaitForValid proposer wait, as a pure apply(state, info, input) → Transition."
+role = "central"
+rank = 0
+paths = [
+    "code/crates/core-state-machine/src/fast/state_machine.rs",
+    "code/crates/core-state-machine/src/fast/state.rs",
+    "code/crates/core-state-machine/src/fast/input.rs",
+    "code/crates/core-state-machine/src/fast/output.rs",
+    "code/crates/core-state-machine/src/fast/mod.rs",
+]
+tests = ["code/crates/core-state-machine/tests/fast_round.rs"]
+dependencies = [
+    "core-types-domain",
+    "fast-vote-keeper",
+]
+operations = [
+    "fast::state_machine::apply(state, info, input) -> Transition — mutates (returns next state)",
+    "Transition::to / ::invalid / ::with_output — constructors",
+    "Info::new(input_round, address, proposer) / Info::new_proposer — query",
+    "Info::is_proposer() — query",
+    "State::new(height, round) — constructor",
+    "State::valid_round() — query (Round::Nil when nothing valid)",
+    "State::valid_is(value_id) — query",
+    "State::with_step(step) — mutates",
+    "State::update_round(round) — mutates (clears scheduled timeouts, keeps valid/decision)",
+    "State::set_valid(round, value_id) — mutates (monotone: no-op unless round > valid_round)",
+    "State::set_decision(proposal_round, value) — mutates",
+    "State::check_timeout(kind) — mutates (returns false on repeat, and for Prevote/Rebroadcast/FinalizeHeight)",
+    "ScheduledTimeouts::check(kind) — mutates; ScheduledTimeouts::clear() — mutates",
+    "Output::vote(ctx, height, round, value_id, address) — always a precommit — query",
+    "Output::schedule_timeout(round, kind) — query",
+]
+headlineProperties = [
+    "valid_p only ever increases: set_valid is a no-op unless the new round is strictly above the recorded valid round",
+    "At most one decision per height; once step is Commit, ProposalAndDecisionQuorum no longer transitions",
+    "Each per-round timeout (Propose, Precommit) is scheduled at most once per round, and the bitset is cleared exactly on a round change",
+    "There is no unlock and no SkipRound: a round advances only via QuorumAny(round >= state.round) or NewRound",
+    "A re-proposal is emitted as Repropose{value_id, valid_round} only when valid is set; the state machine never invents a value it does not hold",
+    "Prevote-shaped inputs/outputs do not exist: every vote output is a precommit",
+]
+adversarySurface = [
+    "Input for a round below state.round (stale votes/proposals replayed) — guarded by this_round / round >= state.round checks",
+    "QuorumAny at a far-future round driving unbounded round advancement",
+    "Re-proposal whose pol_round justification is older than our valid round (L28 acceptance rule)",
+    "TimeoutPrecommit delivered after a decision — guarded by state.decision.is_none()",
+    "WaitForValidExpired racing with the vote quorum that would have resolved the wait",
+    "check_timeout called with TimeoutKind::Prevote, which this protocol has no step for (silently returns false)",
+]
+specHints = "code/crates/core-state-machine/src/fast/state_machine.rs:88 (the apply match, arms annotated with Algorithm 1 line numbers L6/L13/L20/L27/L36/L39/L42/L50/L55); state.rs:100 (valid replaces classic locked+valid); state.rs:120 (awaiting_valid models the paper's WaitForValid as state); state.rs:172 (set_valid monotonicity); state.rs:47 (ScheduledTimeouts::check); reference arXiv:2608.13434 Algorithm 1."
+cardRead = false
+connectionsRead = false
+spec = "quint-specs/fast-round-state-machine.qnt"
+version = 2
+observationsConfirmed = false
+propertiesConfirmed = false
+confirmedObservations = []
+confirmedProperties = []
+retiredObservations = []
+retiredProperties = []
+wireConfirmed = true
+setupCompleted = false
+cardsDone = false
+
+[components.fast-round-state-machine.oracle]
+format = "quint-oracle-config"
+version = 1
+spec = "quint-specs/fast-round-state-machine.qnt"
+main = "fast_round_state_machine"
+eventScope = "fast-round-state-machine"
+observations = [
+    "round_zero_proposer_asked_for_value",
+    "proposer_reproposed_held_identifier",
+    "later_round_proposer_waits_for_valid",
+    "non_proposer_scheduled_propose_timeout",
+    "non_proposer_propose_timeout_suppressed",
+    "proposer_emitted_fresh_proposal",
+    "voted_for_unbound_fresh_proposal",
+    "voted_for_fresh_proposal_matching_valid",
+    "voted_nil_because_bound_to_another_value",
+    "voted_nil_on_invalid_proposal",
+    "voted_nil_on_propose_timeout",
+    "reproposal_accepted_raising_valid",
+    "reproposal_accepted_by_matching_identifier",
+    "reproposal_refused_on_stale_justification",
+    "reproposal_rejected_for_malformed_valid_round",
+    "voted_nil_on_invalid_reproposal",
+    "vote_quorum_raised_valid",
+    "vote_quorum_did_not_raise_valid",
+    "waiting_proposer_reproposed_on_vote_quorum",
+    "precommit_timeout_armed_on_quorum_any",
+    "quorum_any_repeat_armed_nothing",
+    "quorum_any_from_a_higher_round",
+    "decided_on_fresh_proposal",
+    "decided_on_a_proposal_from_another_round",
+    "decision_refused_for_a_reproposal",
+    "decision_refused_in_commit_step",
+    "precommit_timeout_started_the_next_round",
+    "precommit_timeout_after_a_decision_ignored",
+    "wait_for_valid_expired_and_proposed",
+    "untracked_timeout_kind_denied",
+    "timeout_bits_cleared_by_round_change",
+    "input_fell_through_to_invalid",
+    "stale_input_for_an_older_round_ignored",
+]
+testCommand = [
+    "/Users/zarkomilosevic/.cargo/bin/cargo",
+    "test",
+    "--manifest-path",
+    "code/Cargo.toml",
+    "-p",
+    "arc-malachitebft-core-state-machine",
+    "--test",
+    "fast_round",
+    "--features",
+    "quint-oracle/enabled",
+    "--no-fail-fast",
+    "--",
+    "--test-threads=1",
+]
+unguidedStepBudget = 10
+stepReplayBudget = 50
+guardScenarios = true
+
+[components.fast-round-state-machine.oracle.studio]
+system = "Fast Tendermint Round State Machine"
+model = "quint-specs/fast-round-state-machine.qnt"
+invariants = [
+    "valid_p_never_decreases",
+    "fresh_proposal_binding_rule",
+    "reproposal_acceptance_rule",
+    "decision_requires_a_fresh_proposal",
+    "round_advances_only_by_quorum_any_or_timeout_precommit",
+    "decision_is_final_and_commit_is_terminal",
+    "every_vote_output_is_a_precommit",
+    "round_timeout_armed_at_most_once_per_round",
+    "repropose_only_carries_a_value_we_hold",
+]
+
+[[components.fast-round-state-machine.oracle.studio.adversaryDispositions]]
+row = "Input for a round below state.round (stale votes/proposals replayed) — guarded by this_round / round >= state.round checks"
+disposition = "modeled"
+
+[components.fast-round-state-machine.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["faststate_machineapply"]
+observations = [
+    "stale_input_for_an_older_round_ignored",
+    "input_fell_through_to_invalid",
+]
+properties = [
+    "round_advances_only_by_quorum_any_or_timeout_precommit",
+    "decision_is_final_and_commit_is_terminal",
+]
+
+[[components.fast-round-state-machine.oracle.studio.adversaryDispositions]]
+row = "QuorumAny at a far-future round driving unbounded round advancement"
+disposition = "modeled"
+
+[components.fast-round-state-machine.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["faststate_machineapply"]
+observations = [
+    "quorum_any_from_a_higher_round",
+    "precommit_timeout_armed_on_quorum_any",
+    "quorum_any_repeat_armed_nothing",
+]
+properties = [
+    "round_advances_only_by_quorum_any_or_timeout_precommit",
+    "round_timeout_armed_at_most_once_per_round",
+]
+
+[[components.fast-round-state-machine.oracle.studio.adversaryDispositions]]
+row = "Re-proposal whose pol_round justification is older than our valid round (L28 acceptance rule)"
+disposition = "modeled"
+
+[components.fast-round-state-machine.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["faststate_machineapply"]
+observations = [
+    "reproposal_refused_on_stale_justification",
+    "reproposal_accepted_by_matching_identifier",
+    "reproposal_accepted_raising_valid",
+    "reproposal_rejected_for_malformed_valid_round",
+]
+properties = [
+    "reproposal_acceptance_rule",
+    "valid_p_never_decreases",
+]
+
+[[components.fast-round-state-machine.oracle.studio.adversaryDispositions]]
+row = "TimeoutPrecommit delivered after a decision — guarded by state.decision.is_none()"
+disposition = "modeled"
+
+[components.fast-round-state-machine.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["faststate_machineapply"]
+observations = [
+    "precommit_timeout_after_a_decision_ignored",
+    "decision_refused_in_commit_step",
+]
+properties = [
+    "decision_is_final_and_commit_is_terminal",
+    "round_advances_only_by_quorum_any_or_timeout_precommit",
+]
+
+[[components.fast-round-state-machine.oracle.studio.adversaryDispositions]]
+row = "WaitForValidExpired racing with the vote quorum that would have resolved the wait"
+disposition = "modeled"
+
+[components.fast-round-state-machine.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["faststate_machineapply"]
+observations = [
+    "waiting_proposer_reproposed_on_vote_quorum",
+    "wait_for_valid_expired_and_proposed",
+    "later_round_proposer_waits_for_valid",
+]
+properties = [
+    "repropose_only_carries_a_value_we_hold",
+    "valid_p_never_decreases",
+]
+
+[[components.fast-round-state-machine.oracle.studio.adversaryDispositions]]
+row = "check_timeout called with TimeoutKind::Prevote, which this protocol has no step for (silently returns false)"
+disposition = "modeled"
+
+[components.fast-round-state-machine.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "Statecheck_timeout",
+    "ScheduledTimeoutscheck",
+    "ScheduledTimeoutsclear",
+]
+observations = [
+    "untracked_timeout_kind_denied",
+    "timeout_bits_cleared_by_round_change",
+]
+properties = [
+    "round_timeout_armed_at_most_once_per_round",
+    "every_vote_output_is_a_precommit",
+]
+
+[components.fast-round-state-machine.fingerprints]
+spec = "fnv1a64:c8e1f68dce58192e"
+oracle = "fnv1a64:65b242e1e22b20af"
+coverage = "fnv1a64:598014591b3ee640"
+
+[components.fast-round-state-machine.fingerprints.code]
+"code/crates/core-state-machine/src/fast/input.rs" = "fnv1a64:d1ace77c3e334f60"
+"code/crates/core-state-machine/src/fast/mod.rs" = "fnv1a64:83957778a22783b3"
+"code/crates/core-state-machine/src/fast/output.rs" = "fnv1a64:816d0709bb2f9c95"
+"code/crates/core-state-machine/src/fast/state.rs" = "fnv1a64:49935673425172f5"
+"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:f59ffb41e9971077"
+
+[components.fast-round-state-machine.fingerprints.instrumented]
+"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:f59ffb41e9971077"
+"quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
+"quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
+"quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
+"quint-specs/oracle-client/rust/src/lib.rs" = "fnv1a64:7d13f0968325a5d8"
+"quint-specs/oracle-client/rust/src/live.rs" = "fnv1a64:0c96171212feb445"
+"quint-specs/oracle-client/rust/src/live/event.rs" = "fnv1a64:b610035d6435249f"
+"quint-specs/oracle-client/rust/src/live/registry.rs" = "fnv1a64:bf4890ead6ba9d19"
+"quint-specs/oracle-client/rust/src/live/transport.rs" = "fnv1a64:8712d4e9bdf961d7"
+"quint-specs/oracle-client/rust/src/live/value.rs" = "fnv1a64:7c5a5dd102552994"
+"quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
+"quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
+
+[components.fast-vote-keeper]
+name = "Fast Tendermint Vote Keeper"
+description = "Tallies the single Fast Tendermint voting step and latches two independent thresholds per round — 2f+1 makes a value valid, n−f decides and advances the round — returning a list of outputs, with equivocating votes diverted to evidence and no SkipRound."
+role = "central"
+rank = 0
+paths = [
+    "code/crates/core-votekeeper/src/fast/keeper.rs",
+    "code/crates/core-votekeeper/src/fast/params.rs",
+    "code/crates/core-votekeeper/src/fast/mod.rs",
+]
+tests = []
+dependencies = [
+    "core-types-domain",
+    "equivocation-detection",
+]
+operations = [
+    "FastVoteKeeper::new(validator_set, threshold_params) — constructor",
+    "FastVoteKeeper::apply_vote(signed_vote) -> Vec<Output> — mutates",
+    "FastVoteKeeper::total_weight() — query",
+    "FastVoteKeeper::evidence() — query",
+    "FastVoteKeeper::has_vote_quorum(round, value_id) -> bool — query (2f+1, L27 justification)",
+    "FastVoteKeeper::has_decision_quorum(round, value_id) -> bool — query (n−f, L42)",
+    "FastVoteKeeper::prune_votes(min_round) — mutates (evidence is never pruned)",
+    "FastThresholdParams::default() / N_MINUS_F (4/5) / TWO_F_PLUS_ONE (2/5) — query",
+]
+headlineProperties = [
+    "Each output kind fires at most once per round per value: VoteQuorumValue(id), DecisionQuorumValue(id) and QuorumAny are latched separately",
+    "Crossing 2f+1 never suppresses a later n−f for the same value; one vote may emit both, and VoteQuorumValue is ordered before DecisionQuorumValue",
+    "A validator's weight is counted at most once per round (set_once), so equivocation cannot manufacture a quorum",
+    "A second conflicting vote from an already-counted validator becomes evidence and is not tallied; the first vote is retained whole",
+    "A vote from an address outside the validator set creates no per-round state and yields no output",
+    "prune_votes(min_round) drops every round below min_round and leaves evidence intact",
+    "QuorumAny is the only round-advancing output — no SkipRound and no f+1 threshold exists",
+]
+adversarySurface = [
+    "Equivocating votes (same validator, same round, different value) — diverted to EvidenceMap",
+    "Duplicate identical vote replayed — returns no output, weight not double-counted",
+    "Votes from unknown / non-validator addresses",
+    "Uneven voting power where a single vote crosses both 2f+1 and n−f at once",
+    "Nil votes inflating the quorum-any tally toward n−f without any value reaching a threshold",
+    "Votes at arbitrarily high rounds creating unbounded per_round entries",
+    "Votes arriving for a round already pruned",
+]
+specHints = "code/crates/core-votekeeper/src/fast/keeper.rs:100 (apply_vote returns Vec, both thresholds); keeper.rs:118 (equivocation diverted to evidence, first vote kept); keeper.rs:139 (L36 then L42 ordering); keeper.rs:157 (L39 quorum-any over addresses_weights); fast/params.rs:26 (n−f = 4/5, 2f+1 = 2/5 for n = 5f+1); fast/mod.rs (why it is a separate keeper, not a mode)."
+cardRead = false
+connectionsRead = false
+spec = ""
+version = 0
+observationsConfirmed = false
+propertiesConfirmed = false
+confirmedObservations = []
+confirmedProperties = []
+retiredObservations = []
+retiredProperties = []
+wireConfirmed = false
+setupCompleted = false
+cardsDone = false
+
 [components.message-codec]
 name = "Message Codec"
 description = "The Codec trait and the Protobuf, JSON and Borsh encode/decode implementations that put consensus, liveness, sync, stream and peer messages on the wire and take them off again, including the error taxonomy every decode failure is reported through."
@@ -8412,6 +8734,11 @@ at = 1788808359
 subject = "family:non_proposer_scheduled_propose_timeout|prevoted_nil_on_propose_timeout|prevote_timeout_scheduled|input_fell_through_to_invalid"
 outcome = "confirmed"
 at = 1788860779
+
+[[components.round-state-machine.findingVerdicts]]
+subject = "family:non_proposer_scheduled_propose_timeout|round_skipped_on_precommit_timeout|proposer_asked_for_value|input_fell_through_to_invalid"
+outcome = "confirmed"
+at = 1789077654
 
 [components.signing]
 name = "Signing & Verification"
