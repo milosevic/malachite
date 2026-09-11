@@ -163,7 +163,14 @@ where
     }
 
     /// Set the step.
+    ///
+    /// Refuses to leave `Commit`: a decided round is terminal, and letting a caller step
+    /// back out of it is what allowed a finalized decision to be overwritten. The guard
+    /// lives here rather than only in `apply` so the invariant holds for every caller.
     pub fn with_step(self, step: Step) -> Self {
+        if self.step == Step::Commit {
+            return self;
+        }
         Self { step, ..self }
     }
 
@@ -194,7 +201,14 @@ where
     }
 
     /// Record the decided value and the round of the proposal it came from (L43).
+    ///
+    /// Write-once. A second call is a no-op, because a height decides at most one value
+    /// and the paper treats `decision_p` as a latch — L56 reads it as one. Without this
+    /// guard a caller could overwrite a finalized decision directly, bypassing `apply`.
     pub fn set_decision(self, proposal_round: Round, value: Ctx::Value) -> Self {
+        if self.decision.is_some() {
+            return self;
+        }
         Self {
             decision: Some((proposal_round, value)),
             ..self
