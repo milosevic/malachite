@@ -32,7 +32,7 @@ independent reviewer, not by Studio or by the tests.
 | F-27a | My F-22d fix over-widened: a quorum for a FUTURE round set `valid` there, locking the node to nil votes | reviewer (round 2) | high | `51c77153` | next commit | **fixed** |
 | F-27b | `Commit` not terminal — a decided node scheduled timeouts and emitted proposals | reviewer (round 2) | medium-high | `51c77153` | next commit | **fixed** |
 | F-27c | Keeper: outputs lacked their round; `prune_votes` destroyed L27/L42 justification and reset latches; `Round::Nil` tallied; no params ordering check | reviewer (round 2) | medium | `51c77153` | `b245fa86` | **fixed** |
-| F-28 | Pruning blinds equivocation detection for the pruned round — a late conflicting vote goes undetected | Studio (design worker) | medium | `b245fa86` | — | **open**, also affects the classic keeper |
+| F-28 | Pruning blinds equivocation detection for the pruned round — a late conflicting vote goes undetected | Studio (design worker, then triaged `data-loss-or-corruption`) | medium-high | `b245fa86` | next commit | **fixed** in the fast keeper; the classic keeper still has it |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -670,8 +670,38 @@ both have been unreachable by construction. That is now the highest-leverage ope
 - **Candidate fix:** retain `votes_by_address` (or a compact digest of it) across pruning,
   the way the `reached` record and the evidence map already are. Cost is one map per height
   rather than per round, bounded by the validator set.
-- **Not fixed yet** because it touches the classic keeper's behaviour as well, and that is
-  a judgement about existing Malachite semantics rather than about the 5f+1 work.
+### Fixed, and Studio's own generated test proves it
+
+Studio triaged this as **`data-loss-or-corruption`** with `suggestedAction: fix-first` —
+explicitly *"rather than generate-test, because a test written against today's behavior
+would pin the defect"* — and generated
+`equivocation_across_a_prune_is_still_recorded_as_evidence` against the DESIRED behaviour,
+marked `#[ignore]` with "fails on current code".
+
+**Fix:** `first_votes` moved out of `PerRound` into its own map that `prune_votes` does not
+touch, the same shape already used for `reached`. Only the weight tallies are pruned now,
+which is what actually grows with traffic. The generated test then passed and its
+`#[ignore]` was removed: 15 keeper tests pass.
+
+Studio's triage also ruled out the alternatives before concluding, which is why I trusted
+it: reachability 638/3000 in simulation (so not an over-constrained predicate),
+instrumentation present at the tally site (so not a missing log call), and the wired test
+command covering the only target that exercises this keeper (so not a scope gap).
+
+Its severity argument, which I agree with: accountability evidence is per HEIGHT, so a
+double vote in round 3 is equally provable whether the node is now in round 3 or round 9;
+and it is **remotely triggerable by exactly the adversary it targets** — an equivocator
+need only delay its second vote until the victim has moved on, which ordinary gossip and
+sync delivery make easy. Blast radius is bounded: `reached` survives pruning so a rebuilt
+round cannot re-report a threshold, and the exposure is to accountability rather than
+agreement — no double decision follows.
+
+### Still open in the CLASSIC keeper
+
+`code/crates/core-votekeeper/src/keeper.rs` prunes the same way and has the same blindness.
+Not fixed here: it changes shipped Malachite behaviour and its component carries confirmed
+models, so it is a judgement for the maintainers rather than part of the 5f+1 work. The fix
+is the same shape and the evidence above transfers directly.
 
 ---
 
