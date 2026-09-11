@@ -1,6 +1,6 @@
 //! Threshold parameters for Fast Tendermint.
 
-use malachitebft_core_types::ThresholdParam;
+use malachitebft_core_types::{ConsensusProtocol, ThresholdParam};
 
 /// The two thresholds Fast Tendermint tests, as fractions of total voting power.
 ///
@@ -31,10 +31,34 @@ impl FastThresholdParams {
 }
 
 impl Default for FastThresholdParams {
+    /// Derived from [`ConsensusProtocol::Fast`] rather than from the constants above, so
+    /// the fractions have one source of truth. `fractions_match_the_protocol` below fails
+    /// if the constants and the protocol ever drift apart.
     fn default() -> Self {
         Self {
-            decision: Self::N_MINUS_F,
-            quorum: Self::TWO_F_PLUS_ONE,
+            decision: ConsensusProtocol::Fast.decision(),
+            quorum: ConsensusProtocol::Fast.quorum(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The same fractions are written in two places — here and on `ConsensusProtocol`.
+    /// This is what stops them drifting.
+    #[test]
+    fn fractions_match_the_protocol() {
+        let params = FastThresholdParams::default();
+        assert_eq!(params.decision, FastThresholdParams::N_MINUS_F);
+        assert_eq!(params.quorum, FastThresholdParams::TWO_F_PLUS_ONE);
+        assert_eq!(params.decision, ConsensusProtocol::Fast.decision());
+        assert_eq!(params.quorum, ConsensusProtocol::Fast.quorum());
+        assert_eq!(
+            ConsensusProtocol::Fast.honest(),
+            None,
+            "the fast protocol has no honest threshold, so none can leak into these params"
+        );
     }
 }

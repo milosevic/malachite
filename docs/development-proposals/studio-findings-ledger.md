@@ -32,7 +32,11 @@ independent reviewer, not by Studio or by the tests.
 | F-27a | My F-22d fix over-widened: a quorum for a FUTURE round set `valid` there, locking the node to nil votes | reviewer (round 2) | high | `51c77153` | next commit | **fixed** |
 | F-27b | `Commit` not terminal — a decided node scheduled timeouts and emitted proposals | reviewer (round 2) | medium-high | `51c77153` | next commit | **fixed** |
 | F-27c | Keeper: outputs lacked their round; `prune_votes` destroyed L27/L42 justification and reset latches; `Round::Nil` tallied; no params ordering check | reviewer (round 2) | medium | `51c77153` | `b245fa86` | **fixed** |
-| F-28 | Pruning blinds equivocation detection for the pruned round — a late conflicting vote goes undetected | Studio (design worker, then triaged `data-loss-or-corruption`) | medium-high | `b245fa86` | next commit | **fixed** in the fast keeper; the classic keeper still has it |
+| F-28 | Pruning blinds equivocation detection for the pruned round — a late conflicting vote goes undetected | Studio (design worker, then triaged `data-loss-or-corruption`) | medium-high | `b245fa86` | `9dc95d3d` | **fixed** in the fast keeper; the classic keeper still has it |
+| F-29a | My fault-budget check rejected `[2,3,2]` and every n<=3 set — would have **broken the classic path** | reviewer (round 3) | critical | `26553e1a` | next commit | **fixed** (now advisory) |
+| F-29b | My doc comment's justifying example was false and its test never exercised it | reviewer (round 3) | medium | `26553e1a` | next commit | **fixed** |
+| F-29c | Three uncross-checked copies of the same threshold fractions | reviewer (round 3) | medium | `26553e1a` | next commit | **fixed** |
+| F-29d | `saturating_mul` reported a malformed set as an intolerance verdict | reviewer (round 3) | low | `26553e1a` | next commit | **fixed** |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -702,6 +706,78 @@ agreement — no double decision follows.
 Not fixed here: it changes shipped Malachite behaviour and its component carries confirmed
 models, so it is a judgement for the maintainers rather than part of the 5f+1 work. The fix
 is the same shape and the evidence above transfers directly.
+
+## F-29 — Third review: my fault-budget check would have broken the classic path
+
+- **Found against:** `26553e1a` · **Fixed in:** the commit after `aa7d2ad3` · **Source:**
+  independent reviewer, third round
+- The reviewer was asked to check the new `ConsensusProtocol` selection type. It found a
+  critical defect, a false claim in my own documentation, and three design problems — and
+  verified the parts that were right against the code rather than against my description.
+
+### F-29a — CRITICAL. The check rejected the validator sets Malachite actually runs
+`tolerates_at_least_one_fault` (then named `check_validator_set`) accepted a set only when
+`largest * d < total`. For classic that rejects any set where one validator holds a third
+or more, which is **every set of three or fewer**, and the reviewer counted the usages:
+
+| Set | Uses in this repo | Classic verdict |
+| --- | --- | --- |
+| `[2, 3, 2]` | **62** | rejected |
+| `[1, 1, 1]` | 13 | rejected |
+| `[1, 2, 3]` | 9 | rejected |
+| `[25, 25, 25, 25]` | 16 | accepted |
+
+`[2, 3, 2]` is the most-used validator set in the repository. Threading this in as the
+"hard startup check" the plan calls for would have **broken the classic path**, directly
+against the coexistence constraint that nothing is removed from it.
+
+The arithmetic was right; the question was wrong. `largest < total/d` asks *"does this set
+tolerate at least one fault?"*, not *"does it satisfy the protocol's assumption?"* —
+`[2, 3, 2]` satisfies classic's assumption at `f = 0`, and a three-node network with a 2/3
+quorum is safe and shipped. **Fixed:** renamed to `tolerates_at_least_one_fault`, documented
+as ADVISORY with an explicit "do not use as a startup gate for Classic", and pinned by a
+test asserting those small sets fail the check and are still legitimate.
+
+### F-29b — My doc comment's justifying example was false, and untested
+It claimed `[5, 3, 1, 1]` is "fine for classic and hopeless for fast". Total 10, largest 5:
+classic gives `5 x 3 = 15 >= 10`, so it is rejected for **both**. The test using that exact
+set checked only the Fast arm, so the claim was never executed. **Fixed:** the example is
+now `[3, 3, 3, 1]`, which genuinely behaves as described, and a test asserts both arms.
+
+### F-29c — Three copies of the same fractions, none cross-checked
+`ThresholdParam::TWO_F_PLUS_ONE`/`F_PLUS_ONE`, `FastThresholdParams::N_MINUS_F`/
+`TWO_F_PLUS_ONE`, and now `ConsensusProtocol::{quorum,decision,honest}` — with nothing
+keeping them in sync. **Fixed:** both `Default` impls now derive from `ConsensusProtocol`,
+and a test fails if the constants and the protocol drift apart.
+
+### F-29d — `saturating_mul` hid a malformed set inside an intolerance verdict
+The reviewer confirmed my worry was **unfounded in the safe direction** — saturation clamps
+to `u64::MAX`, which is `>=` any total, so an overflowing product always rejects. But it
+reported a malformed set as `SingleValidatorExceedsFaultBudget`. **Fixed:** `checked_mul`
+with a distinct `PowerOverflow` variant.
+
+### Verified correct against the code, not my claim
+`Classic.decision() == Classic.quorum() == 2/3` — confirmed at
+`core-votekeeper/src/keeper.rs:687` and `signing/src/ext.rs:757/1137/1207`, which use
+`thresholds.quorum` for certificate verification. `Fast.honest() == None` is right, and
+`ext.rs:1208` (`RoundCertificateType::Skip => &thresholds.honest`) is the single site that
+consumes it — exactly the skip machinery the fast protocol removes. The `>=` boundary is
+correct because `f < n/d` is strict.
+
+### Still open, recorded rather than fixed
+- **`Option` is the wrong shape for threading.** Adding `protocol` *beside*
+  `threshold_params` creates two sources of truth that can disagree —
+  `protocol: Fast` with `threshold_params: 2/3` would compile and run a fast node on
+  classic quorums. Replacing it forces `.expect()` into `Driver::new`. The reviewer's
+  suggestion: make `protocol` the only source and have the classic driver derive its
+  params internally. Documented on `classic_threshold_params` for now.
+- **Network-wide agreement is still unenforced.** Nothing carries the protocol into
+  genesis, the handshake or certificate verification, so a fast node and a classic node on
+  one network would disagree silently at the first quorum. The enum is a prerequisite for
+  that check, not the check. Now stated in its own doc comment so it cannot be misread as
+  closing the item.
+- `NoFaultTolerance` has no `Display`/`Error` impl; `ConsensusProtocol` has no
+  `Display`/`FromStr`, so config parsing depends on the optional `serde` feature.
 
 ---
 

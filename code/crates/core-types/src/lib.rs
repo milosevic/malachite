@@ -69,7 +69,7 @@ pub use certificate::{
     ExtendedCommitCertificate, ExtendedCommitSignature, PolkaCertificate, PolkaSignature,
     RoundCertificate, RoundCertificateType, RoundSignature, ValueResponse,
 };
-pub use consensus_protocol::{ConsensusProtocol, InadequateValidatorSet};
+pub use consensus_protocol::{ConsensusProtocol, NoFaultTolerance};
 pub use context::Context;
 pub use error::BoxError;
 pub use height::Height;

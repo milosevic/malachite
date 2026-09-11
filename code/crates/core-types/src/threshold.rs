@@ -33,10 +33,17 @@ pub struct ThresholdParams {
 }
 
 impl Default for ThresholdParams {
+    /// The classic protocol's thresholds.
+    ///
+    /// Derived from [`crate::ConsensusProtocol::Classic`] rather than written out again,
+    /// so the fractions live in exactly one place. Three copies of them existed at one
+    /// point and nothing kept them in sync.
     fn default() -> Self {
         Self {
-            quorum: ThresholdParam::TWO_F_PLUS_ONE,
-            honest: ThresholdParam::F_PLUS_ONE,
+            quorum: crate::ConsensusProtocol::Classic.quorum(),
+            honest: crate::ConsensusProtocol::Classic
+                .honest()
+                .expect("the classic protocol always has an honest threshold"),
         }
     }
 }

@@ -10,6 +10,13 @@ use crate::{Context, ThresholdParam, ThresholdParams, ValidatorSet, VotingPower}
 /// takes, and in the quorum a commit certificate must carry — so every validator in a set
 /// must run the same one. This is selected at genesis and fixed for the network, never
 /// toggled at runtime.
+///
+/// # This type does not yet enforce network-wide agreement
+///
+/// Nothing here carries the protocol into genesis, the handshake, or certificate
+/// verification, so a `Fast` node and a `Classic` node on one network would disagree
+/// silently at the first quorum. This enum is a prerequisite for that check, not the check
+/// itself.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -27,15 +34,22 @@ pub enum ConsensusProtocol {
     Fast,
 }
 
-/// Why a validator set cannot run a protocol.
+/// Why a validator set cannot tolerate even one fault under a protocol.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum InadequateValidatorSet {
-    /// The set is empty.
-    Empty,
+pub enum NoFaultTolerance {
+    /// The set has no voting power at all.
+    NoVotingPower,
 
-    /// One validator holds enough voting power that a single fault would exceed the
-    /// protocol's budget, so its safety argument does not apply to this set.
-    SingleValidatorExceedsFaultBudget {
+    /// The voting powers are large enough that the comparison overflows, which means the
+    /// set is malformed rather than merely intolerant.
+    PowerOverflow {
+        /// The largest single voting power in the set.
+        largest: VotingPower,
+    },
+
+    /// One validator holds at least the whole tolerated share, so a single fault from it
+    /// would already exceed the budget.
+    SingleValidatorHoldsTheWholeBudget {
         /// The largest single voting power in the set.
         largest: VotingPower,
         /// The set's total voting power.
@@ -92,8 +106,11 @@ impl ConsensusProtocol {
 
     /// The classic `ThresholdParams`, for the code paths that still take them.
     ///
-    /// Only meaningful for [`ConsensusProtocol::Classic`], since the fast protocol has no
-    /// honest threshold.
+    /// `None` for [`ConsensusProtocol::Fast`], which has no honest threshold at all. Call
+    /// this only where the classic protocol is already established — do **not** thread the
+    /// `Option` outward and unwrap it at a call site that might be running fast, which
+    /// would turn a protocol mismatch into a panic. Prefer [`Self::quorum`],
+    /// [`Self::decision`] and [`Self::honest`], which are total.
     pub const fn classic_threshold_params(self) -> Option<ThresholdParams> {
         match self {
             ConsensusProtocol::Classic => Some(ThresholdParams {
@@ -104,23 +121,38 @@ impl ConsensusProtocol {
         }
     }
 
-    /// Whether `validator_set` can support this protocol's fault assumption.
+    /// Whether `validator_set` can tolerate **at least one** fault under this protocol.
     ///
-    /// The protocols assume faulty voting power below `total/3` or `total/5`. Nobody knows
-    /// which validators are faulty, but a set where a **single** validator already holds
-    /// that share cannot satisfy the assumption under any single fault, and running on it
-    /// means the safety argument does not apply. That is easy to create by accident: a set
-    /// of four with weights 5/3/1/1 is fine for classic and hopeless for fast.
-    pub fn check_validator_set<Ctx>(
+    /// # This is ADVISORY. Do not use it as a startup gate for [`ConsensusProtocol::Classic`]
+    ///
+    /// A set that fails this is not invalid — it is a set that tolerates `f = 0`, which is
+    /// a legitimate and widely used configuration. Malachite's own test suite runs
+    /// `[2, 3, 2]` in dozens of places, and a three-node network with a 2/3 quorum is safe
+    /// and shipped. Rejecting those at startup would remove working classic deployments,
+    /// which the coexistence constraint forbids.
+    ///
+    /// Use it to warn an operator who believes they are getting fault tolerance and is
+    /// not, and to catch the easy mistake when opting in to
+    /// [`ConsensusProtocol::Fast`] — whose whole justification is a much larger set for
+    /// the same tolerance, so a set that tolerates nothing defeats the point entirely.
+    /// `[3, 3, 3, 1]` tolerates one fault under classic and none under fast.
+    ///
+    /// # What it does and does not prove
+    ///
+    /// It is a **necessary, not sufficient** condition. Bounding the largest single
+    /// validator cannot express "tolerates `k` faults": `[1; 6]` passes for fast and
+    /// tolerates exactly one, while `[1; 11]` tolerates two. The check asks only whether
+    /// one validator already holds the entire budget.
+    pub fn tolerates_at_least_one_fault<Ctx>(
         self,
         validator_set: &Ctx::ValidatorSet,
-    ) -> Result<(), InadequateValidatorSet>
+    ) -> Result<(), NoFaultTolerance>
     where
         Ctx: Context,
     {
         let total = validator_set.total_voting_power();
         if validator_set.count() == 0 || total == 0 {
-            return Err(InadequateValidatorSet::Empty);
+            return Err(NoFaultTolerance::NoVotingPower);
         }
 
         let denominator = self.tolerated_fault_denominator();
@@ -130,9 +162,15 @@ impl ConsensusProtocol {
             .max()
             .unwrap_or(0);
 
-        // A single fault must stay inside the budget: largest < total / denominator.
-        if largest.saturating_mul(denominator) >= total {
-            return Err(InadequateValidatorSet::SingleValidatorExceedsFaultBudget {
+        // Reported separately rather than folded into the intolerance case: an overflowing
+        // product means the set is malformed, not merely intolerant.
+        let Some(share) = largest.checked_mul(denominator) else {
+            return Err(NoFaultTolerance::PowerOverflow { largest });
+        };
+
+        // `f < n/d` is strict, so a validator holding exactly the share already breaks it.
+        if share >= total {
+            return Err(NoFaultTolerance::SingleValidatorHoldsTheWholeBudget {
                 largest,
                 total,
                 tolerated_denominator: denominator,
