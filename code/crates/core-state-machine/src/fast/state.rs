@@ -170,9 +170,16 @@ where
     /// Move to `round`, clearing the per-round timeout bookkeeping.
     ///
     /// `valid` and `decision` are per-height and deliberately survive.
+    ///
+    /// The timeout bits are cleared only when the round actually **changes**. Clearing
+    /// unconditionally would re-arm a round we are already in, defeating the
+    /// at-most-once guard in `check_timeout` — `apply` accepts `NewRound(r)` whenever
+    /// `state.round <= r`, so re-entering the current round is reachable.
     pub fn update_round(&mut self, round: Round) {
-        self.round = round;
-        self.scheduled_timeouts.clear();
+        if self.round != round {
+            self.round = round;
+            self.scheduled_timeouts.clear();
+        }
     }
 
     /// Record `2f+1` votes for `value_id` seen in `round` (L30, L37, L48).

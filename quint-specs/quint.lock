@@ -4578,7 +4578,7 @@ confirmedProperties = []
 retiredObservations = []
 retiredProperties = []
 wireConfirmed = true
-setupCompleted = false
+setupCompleted = true
 cardsDone = false
 
 [components.fast-round-state-machine.oracle]

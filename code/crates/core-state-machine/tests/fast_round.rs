@@ -362,3 +362,54 @@ fn nil_and_value_votes_are_distinguishable() {
     let val: NilOrVal<ValueId> = NilOrVal::Val(ValueId::new(1));
     assert_ne!(nil, val);
 }
+
+/// L43/L56: a decision is final — once the machine has decided, no later input may
+/// replace that decision with another value.
+///
+/// Realistic path, all through `apply` under default settings: decide at round 4, then
+/// take the `NewRound(5)` the driver issues for the next round — the decide arm guards
+/// only on `step != Commit`, and `NewRound` leaves `decision` set while moving the step
+/// back to `Propose`, so the next `ProposalAndDecisionQuorum` overwrites the decision.
+///
+/// reproduces decision_is_final_and_commit_is_terminal — fails on current code
+#[test]
+#[ignore]
+fn a_decision_is_never_replaced_after_a_new_round() {
+    let me = addr(1);
+    let ctx = ctx();
+
+    // Decide value 7 (proposed in round 4) while at round 4.
+    let info4 = Info::<TestContext>::new_proposer(at(4), &me);
+    let decided = apply(
+        &ctx,
+        proposing(4),
+        &info4,
+        Input::ProposalAndDecisionQuorum(fresh_proposal(4, 7, me)),
+    )
+    .next_state;
+    assert_eq!(decided.step, Step::Commit);
+    assert_eq!(decided.decision.clone().expect("decided").1, Value::new(7));
+
+    // The driver moves on to round 5; the decision is carried along.
+    let info5 = Info::<TestContext>::new_proposer(at(5), &me);
+    let at_five = apply(&ctx, decided, &info5, Input::NewRound(at(5))).next_state;
+    assert_eq!(
+        at_five.decision.clone().expect("the decision survives the round change").1,
+        Value::new(7)
+    );
+
+    // A second decision quorum, for a different value, must not be accepted.
+    let t = apply(
+        &ctx,
+        at_five,
+        &info5,
+        Input::ProposalAndDecisionQuorum(fresh_proposal(4, 5, me)),
+    );
+
+    assert!(!t.valid, "a second decision must not be accepted");
+    assert_eq!(
+        t.next_state.decision.expect("kept").1,
+        Value::new(7),
+        "the first decision is final"
+    );
+}

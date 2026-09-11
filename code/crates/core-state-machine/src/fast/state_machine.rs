@@ -309,7 +309,11 @@ where
 
         // L42-L43: decide. The fresh proposal supplies the value and its validity; the
         // n - f votes may come from a different round.
-        (step, Input::ProposalAndDecisionQuorum(proposal)) if step != Step::Commit => {
+        // L42-L43. The guard is on `decision`, NOT on the step: `NewRound` resets the step
+        // to Propose while carrying the decision forward, so a step-only guard would let a
+        // second quorum overwrite a finalized value — two different values decided at one
+        // height. The paper treats `decision_p` as write-once; L56 reads it as a latch.
+        (_, Input::ProposalAndDecisionQuorum(proposal)) if state.decision.is_none() => {
             if !proposal.pol_round().is_nil() {
                 // Only a fresh proposal establishes validity; a re-proposal carries an
                 // identifier and cannot be decided on alone.
