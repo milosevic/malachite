@@ -98,12 +98,12 @@ module fast_round_state_machine {
     decision: MaybeDec,
     awaiting_valid: bool,
     scheduled: Set[TimeoutKind],
-    /// state.rs `armed_precommit_rounds`: the rounds whose L39 precommit timeout
-    /// has been armed. Kept per round rather than in `scheduled`, because L39
-    /// arms the timeout for the QUORUM's round, which may be above ours — the
-    /// per-round bit would let a quorum for round 0 consume the only slot and
-    /// leave round 1's timeout unarmed forever. It is per height, so a round
-    /// change does not clear it.
+    // state.rs `armed_precommit_rounds`: the rounds whose L39 precommit timeout
+    // has been armed. Kept per round rather than in `scheduled`, because L39
+    // arms the timeout for the QUORUM's round, which may be above ours — the
+    // per-round bit would let a quorum for round 0 consume the only slot and
+    // leave round 1's timeout unarmed forever. It is per height, so a round
+    // change does not clear it.
     armedPrecommit: Set[Round],
   }
 
@@ -118,14 +118,20 @@ module fast_round_state_machine {
   /// concrete `ValueId` the fast-round test suite produces, rendered the way the
   /// code renders it (`ValueId`'s Display is lower-case hex).
   pure val VALUES: Set[Value] =
-    Set("v", "w", "x", "1", "2", "5", "7", "8", "9", "2a", "4d", "63")
+    Set("v", "w", "x",
+        // every ValueId the fast_round suite can produce: Value::new / ValueId::new
+        // of 1, 2, 4, 5, 7, 8, 9, 42, 77, 99 — plus 0, the identifier boundary.
+        "0", "1", "2", "4", "5", "7", "8", "9", "2a", "4d", "63")
   pure val ADDRS: Set[Addr] = Set("a", "b")
   pure val ME: Addr = "a"
 
   /// Every round-shaped pick draws from here. -1 (Round::Nil) and rounds at or
   /// above the current round are deliberately included so `!vr.is_defined()`,
   /// `vr >= state.round` and a stale `input_round` all stay falsifiable.
-  pure val ROUND_BAND: Set[Round] = Set(-1, 0, 1, 2, 3, 4, 5)
+  /// Rounds 0..9 plus Nil. The suite drives rounds 0-5 and, in the future-round
+  /// quorum test, round 9; the band is contiguous so every round between them is
+  /// expressible too.
+  pure val ROUND_BAND: Set[Round] = Set(-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 
   pure val TIMEOUT_KINDS: Set[TimeoutKind] =
     Set(TPropose, TPrecommit, TPrevote, TRebroadcast, TFinalizeHeight)
@@ -160,6 +166,12 @@ module fast_round_state_machine {
   /// The ScheduledTimeouts bitset, as the two bits state.rs uses.
   pure val SCHEDULED_BITS: Set[int] = Set(0, 1, 2, 3)
 
+  /// The `armed_precommit_rounds` masks the search explores. The full 2^7 space
+  /// is not worth walking: every mask a real trace carries is pinned by the
+  /// logged `sarmed`, and these cover empty, each single round, and a couple of
+  /// combinations, which is what the L39 at-most-once-per-round branch needs.
+  pure val ARMED_MASKS: Set[int] = Set(0, 1, 2, 4, 8, 16, 32, 64, 1024, 6, 12, 126)
+
   /// Rebuild the `State<Ctx>` a call to `apply` was handed, from the fields the
   /// instrumentation logs. `apply` is a pure function of (state, info, input),
   /// and callers — the test suite above all — hand it states they built
@@ -188,8 +200,9 @@ module fast_round_state_machine {
   }
 
   /// `armed_precommit_rounds` travels as a bitmask over ROUND_BAND: bit 0 is
-  /// round -1, bit i+1 is round i. Only rounds in the band are represented; a
-  /// round armed outside it would fail replay loudly rather than pass wrongly.
+  /// round -1, bit i+1 is round i, for i in 0..=9. Only rounds in the band are
+  /// represented; a round armed outside it would fail replay loudly rather than
+  /// pass wrongly.
   pure def armedBit(r: Round): int = 2^(r + 1)
 
   pure def armedBitSet(mask: int, r: Round): bool =
@@ -351,8 +364,14 @@ module fast_round_state_machine {
       // so re-entering the round we are already in never happens. Without it, a
       // NewRound for the current round resets Precommit back to Propose and the
       // node can cast a SECOND vote in that round — equivocating against itself.
+      // L56 calls StartRound only while `decision_p = nil`. Without the decision
+      // guard a decided node keeps entering rounds: `with_step` correctly refuses
+      // to leave Commit, but `update_round` still advances and `start_round` runs
+      // to completion, so the node schedules timeouts and emits proposals after
+      // deciding.
       | NewRound(r) =>
-          if (s.step == Unstarted and s.round <= r) startRound(s, i, r)
+          if (s.decision != NoDec) { st: s, out: ONone, ok: false, line: "NoArm" }
+          else if (s.step == Unstarted and s.round <= r) startRound(s, i, r)
           else if (s.round < r) startRound(s, i, r)
           else { st: s, out: ONone, ok: false, line: "NoArm" }
 
@@ -411,7 +430,17 @@ module fast_round_state_machine {
       // sits at round_p while the quorum that ends its wait is for round_p - 1
       // (L46), so gating on the current round would make L47 unreachable and
       // force every wait to burn its full timeout.
-      | VoteQuorumForValue(q) => {
+      // The upper bound is the paper's core restriction: the observation rule
+      // must capture valid values BEFORE a process moves to a higher round. L36
+      // sets valid_p from round_p, and L47 runs inside WaitForValid whose loop
+      // condition (valid_p.round < round_p - 1) bounds r below round_p. Neither
+      // lets valid_p exceed round_p. Without this, a quorum for a far-future
+      // round sets valid there and the node votes nil in every round up to it —
+      // a self-inflicted lock, and reachable, because the vote keeper emits its
+      // quorum output for any round.
+      | VoteQuorumForValue(q) =>
+        if (q.round > s.round) { st: s, out: ONone, ok: false, line: "NoArm" }
+        else {
           val raised = validRound(s) < q.round
           val s2 = setValid(s, q.round, q.value_id)
           if (not(raised)) { st: s2, out: ONone, ok: false, line: "L36NotRaised" }
@@ -446,10 +475,16 @@ module fast_round_state_machine {
           if (s.decision == NoDec)
             if (not(isNil(p.polRound)))
               { st: s, out: ONone, ok: false, line: "L42ReproposalCannotDecide" }
-            else
-              { st: withStep(setDecision(s, p.round, p.value), Commit),
+            else {
+              // Clearing the wait matters: a proposer that decided while still
+              // waiting would otherwise have `awaiting_valid` set, and a later
+              // vote quorum would drive propose_now — emitting a proposal from a
+              // committed state.
+              val s2 = { ...s, awaiting_valid: false }
+              { st: withStep(setDecision(s2, p.round, p.value), Commit),
                 out: ODecision({ round: p.round, value: p.value }),
                 ok: true, line: "L43Decide" }
+            }
           else { st: s, out: ONone, ok: false, line: "CommitTerminal" }
 
       // L50-L53: no proposal arrived in time.
@@ -531,8 +566,13 @@ module fast_round_state_machine {
   /// The timeout kinds THIS transition armed — exactly the one its
   /// `ScheduleTimeout` output names, since that output is emitted only when
   /// `check_timeout` granted the bit.
+  /// Only the propose timeout lives in the per-round bitset; L39's precommit
+  /// timeout is latched in `armedPrecommit` instead.
   pure def armedBy(o: Output): Set[TimeoutKind] =
-    match o { | OScheduleTimeout(t) => Set(t.kind) | _ => Set() }
+    match o {
+      | OScheduleTimeout(t) => if (t.kind == TPropose) Set(TPropose) else Set()
+      | _ => Set()
+    }
 
   /// L6/L18: entering a new round clears the previous round's timeout
   /// bookkeeping, so after a round change the scheduled set holds nothing
@@ -547,7 +587,9 @@ module fast_round_state_machine {
 
   pure def timeoutRearmed(pre: SMState, r: Result): bool =
     match r.out {
-      | OScheduleTimeout(t) => r.st.round == pre.round and pre.scheduled.contains(t.kind)
+      | OScheduleTimeout(t) =>
+          if (t.kind == TPrecommit) pre.armedPrecommit.contains(t.round)
+          else r.st.round == pre.round and pre.scheduled.contains(t.kind)
       | _ => false
     }
 
@@ -838,10 +880,11 @@ module fast_round_state_machine {
       nondet sdvalue = VALUES.oneOf()
       nondet sawaiting = Set(false, true).oneOf()
       nondet sscheduled = SCHEDULED_BITS.oneOf()
+      nondet sarmed = ARMED_MASKS.oneOf()
       val info = { input_round: input_round, address: ME, proposer: proposer }
       val p = { round: pround, value: pvalue, polRound: ppol }
       faststate_machineapply(
-        mkPre(sround, sstep, svround, svalue, sdround, sdvalue, sawaiting, sscheduled),
+        mkPre(sround, sstep, svround, svalue, sdround, sdvalue, sawaiting, sscheduled, sarmed),
         info, mkInput(inputTag, p, pvalue, nround))
     },
 
@@ -865,10 +908,42 @@ module fast_round_state_machine {
       nondet sdvalue = Set(match state.decision { | NoDec => "v" | SomeDec(d) => d.value }).oneOf()
       nondet sawaiting = Set(state.awaiting_valid).oneOf()
       nondet sscheduled = Set(bitsOf(state)).oneOf()
+      nondet sarmed = Set(armedMaskOf(state)).oneOf()
       val info = { input_round: input_round, address: ME, proposer: proposer }
       val p = { round: pround, value: pvalue, polRound: ppol }
       faststate_machineapply(
-        mkPre(sround, sstep, svround, svalue, sdround, sdvalue, sawaiting, sscheduled),
+        mkPre(sround, sstep, svround, svalue, sdround, sdvalue, sawaiting, sscheduled, sarmed),
+        info, mkInput(inputTag, p, pvalue, nround))
+    },
+
+    // Arm 3 — the BINDING arm, pure search guidance. Same pick NAMES as arm 1,
+    // but the pre-state holds exactly the identifier the proposal names, and the
+    // rounds are aligned so the input is for the round we are at. The two
+    // branches that need that coincidence — L21's "a fresh proposal re-offers
+    // what we hold" and L28's "a stale justification re-offers what we hold" —
+    // are otherwise reached only when a free `pvalue` pick happens to collide
+    // with a free `svalue` pick, which is a 1-in-15 accident per step.
+    {
+      nondet proposer = ADDRS.oneOf()
+      nondet inputTag = Set("Proposal", "ProposalAndVoteQuorumPrevious").oneOf()
+      nondet pvalue = VALUES.oneOf()
+      nondet svalue = Set(pvalue).oneOf()
+      nondet sround = Set(1, 2, 3, 4, 5).oneOf()
+      nondet svround = Set(0, 1, 2, 3, 4).oneOf()
+      nondet ppol = Set(-1, 0, 1, 2, 3, 4).oneOf()
+      nondet pround = Set(sround).oneOf()
+      nondet input_round = Set(sround).oneOf()
+      nondet nround = Set(sround).oneOf()
+      nondet sstep = Set("Propose").oneOf()
+      nondet sdround = Set(-1).oneOf()
+      nondet sdvalue = Set("v").oneOf()
+      nondet sawaiting = Set(false).oneOf()
+      nondet sscheduled = Set(0).oneOf()
+      nondet sarmed = Set(0).oneOf()
+      val info = { input_round: input_round, address: ME, proposer: proposer }
+      val p = { round: pround, value: pvalue, polRound: ppol }
+      faststate_machineapply(
+        mkPre(sround, sstep, svround, svalue, sdround, sdvalue, sawaiting, sscheduled, sarmed),
         info, mkInput(inputTag, p, pvalue, nround))
     },
 

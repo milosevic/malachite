@@ -112,7 +112,7 @@ where
     let oracle_sawaiting = state.awaiting_valid;
     let oracle_sscheduled = i64::from(state.scheduled_timeouts.bits());
     // `armed_precommit_rounds` travels as a bitmask over the model's round band:
-    // bit 0 is round -1, bit i+1 is round i, for i in 0..=5. A round armed
+    // bit 0 is round -1, bit i+1 is round i, for i in 0..=9. A round armed
     // outside the band is not represented, which fails replay loudly rather than
     // passing wrongly.
     let oracle_sarmed = state
@@ -120,7 +120,7 @@ where
         .iter()
         .filter_map(|r| {
             let i = r.as_i64();
-            (-1..=5).contains(&i).then(|| 1_i64 << (i + 1))
+            (-1..=9).contains(&i).then(|| 1_i64 << (i + 1))
         })
         .sum::<i64>();
     let (oracle_tag, oracle_value, oracle_pround, oracle_ppol, oracle_nround) = if oracle_on {

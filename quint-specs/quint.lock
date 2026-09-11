@@ -4570,7 +4570,7 @@ specHints = "code/crates/core-state-machine/src/fast/state_machine.rs:88 (the ap
 cardRead = false
 connectionsRead = false
 spec = "quint-specs/fast-round-state-machine.qnt"
-version = 2
+version = 4
 observationsConfirmed = false
 propertiesConfirmed = false
 confirmedObservations = []
@@ -4755,19 +4755,19 @@ properties = [
 ]
 
 [components.fast-round-state-machine.fingerprints]
-spec = "fnv1a64:c8e1f68dce58192e"
+spec = "fnv1a64:608d854d89480729"
 oracle = "fnv1a64:65b242e1e22b20af"
-coverage = "fnv1a64:598014591b3ee640"
+coverage = "fnv1a64:d37df0739542cc00"
 
 [components.fast-round-state-machine.fingerprints.code]
-"code/crates/core-state-machine/src/fast/input.rs" = "fnv1a64:d1ace77c3e334f60"
+"code/crates/core-state-machine/src/fast/input.rs" = "fnv1a64:35640c16937b589e"
 "code/crates/core-state-machine/src/fast/mod.rs" = "fnv1a64:83957778a22783b3"
 "code/crates/core-state-machine/src/fast/output.rs" = "fnv1a64:816d0709bb2f9c95"
-"code/crates/core-state-machine/src/fast/state.rs" = "fnv1a64:f59274be5e1cb99c"
-"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:15f29b7a52cd44c6"
+"code/crates/core-state-machine/src/fast/state.rs" = "fnv1a64:1a8f18a3c1a63add"
+"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:f37864213a9edd6b"
 
 [components.fast-round-state-machine.fingerprints.instrumented]
-"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:15f29b7a52cd44c6"
+"code/crates/core-state-machine/src/fast/state_machine.rs" = "fnv1a64:f37864213a9edd6b"
 "quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
 "quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
 "quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
@@ -4796,7 +4796,7 @@ at = 1789125304
 
 [components.fast-vote-keeper]
 name = "Fast Tendermint Vote Keeper"
-description = "Tallies the single Fast Tendermint voting step and latches two independent thresholds per round — 2f+1 makes a value valid, n−f decides and advances the round — returning a list of outputs, with equivocating votes diverted to evidence and no SkipRound."
+description = "Tallies Fast Tendermint's single precommit step per round and latches two independent thresholds — 2f+1 makes a value valid, n−f decides and advances the round — returning every threshold one vote newly crosses, diverting equivocating votes to evidence and keeping the reached-threshold record and the evidence across pruning."
 role = "central"
 rank = 0
 paths = [
@@ -4840,17 +4840,254 @@ adversarySurface = [
 specHints = "code/crates/core-votekeeper/src/fast/keeper.rs:100 (apply_vote returns Vec, both thresholds); keeper.rs:118 (equivocation diverted to evidence, first vote kept); keeper.rs:139 (L36 then L42 ordering); keeper.rs:157 (L39 quorum-any over addresses_weights); fast/params.rs:26 (n−f = 4/5, 2f+1 = 2/5 for n = 5f+1); fast/mod.rs (why it is a separate keeper, not a mode)."
 cardRead = false
 connectionsRead = false
-spec = ""
-version = 0
-observationsConfirmed = false
-propertiesConfirmed = false
-confirmedObservations = []
-confirmedProperties = []
+spec = "quint-specs/fast-vote-keeper.qnt"
+version = 2
+observationsConfirmed = true
+propertiesConfirmed = true
+confirmedObservations = [
+    "vote_tallied_without_output",
+    "vote_quorum_emitted",
+    "decision_quorum_emitted",
+    "both_quorums_from_one_vote",
+    "quorum_any_emitted",
+    "quorum_any_without_any_value_quorum",
+    "two_disjoint_value_quorums_in_one_round",
+    "value_at_exact_quorum_boundary",
+    "value_at_exact_decision_boundary",
+    "prevote_discarded",
+    "unknown_voter_discarded",
+    "nil_round_discarded",
+    "duplicate_vote_ignored",
+    "equivocation_recorded",
+    "equivocation_pair_deduplicated",
+    "equivocation_cap_reached",
+    "round_pruned",
+    "vote_retallied_after_prune",
+    "pruned_round_emits_nothing_again",
+    "equivocation_missed_after_prune",
+]
+confirmedProperties = [
+    "both_thresholds_are_reported_independently",
+    "decision_quorum_implies_its_vote_quorum",
+    "equivocation_never_manufactures_a_quorum",
+    "each_output_fires_at_most_once_per_round_kind_value",
+    "only_precommits_are_tallied",
+    "no_vote_at_an_undefined_round_is_tallied",
+    "every_output_carries_the_round_of_its_votes",
+    "threshold_answers_survive_pruning",
+    "a_pruned_round_never_re_reports_its_thresholds",
+    "pruning_drops_exactly_the_rounds_below_min_round",
+    "two_disjoint_vote_quorums_are_both_reported",
+    "threshold_is_strict_at_the_boundary",
+]
 retiredObservations = []
 retiredProperties = []
-wireConfirmed = false
-setupCompleted = false
+wireConfirmed = true
+setupCompleted = true
 cardsDone = false
+
+[components.fast-vote-keeper.oracle]
+format = "quint-oracle-config"
+version = 1
+spec = "quint-specs/fast-vote-keeper.qnt"
+main = "fast_vote_keeper"
+eventScope = "fast-vote-keeper"
+observations = [
+    "vote_tallied_without_output",
+    "vote_quorum_emitted",
+    "decision_quorum_emitted",
+    "both_quorums_from_one_vote",
+    "quorum_any_emitted",
+    "quorum_any_without_any_value_quorum",
+    "two_disjoint_value_quorums_in_one_round",
+    "value_at_exact_quorum_boundary",
+    "value_at_exact_decision_boundary",
+    "prevote_discarded",
+    "unknown_voter_discarded",
+    "nil_round_discarded",
+    "duplicate_vote_ignored",
+    "equivocation_recorded",
+    "equivocation_pair_deduplicated",
+    "equivocation_cap_reached",
+    "round_pruned",
+    "vote_retallied_after_prune",
+    "pruned_round_emits_nothing_again",
+    "equivocation_missed_after_prune",
+]
+testCommand = [
+    "/Users/zarkomilosevic/.cargo/bin/cargo",
+    "test",
+    "--manifest-path",
+    "code/Cargo.toml",
+    "-p",
+    "arc-malachitebft-core-votekeeper",
+    "--test",
+    "fast_vote_keeper",
+    "--features",
+    "quint-oracle/enabled",
+    "--no-fail-fast",
+    "--",
+    "--test-threads=1",
+]
+unguidedStepBudget = 10
+stepReplayBudget = 50
+guardScenarios = true
+
+[components.fast-vote-keeper.oracle.studio]
+system = "Fast Tendermint Vote Keeper"
+model = "quint-specs/fast-vote-keeper.qnt"
+invariants = [
+    "both_thresholds_are_reported_independently",
+    "decision_quorum_implies_its_vote_quorum",
+    "equivocation_never_manufactures_a_quorum",
+    "each_output_fires_at_most_once_per_round_kind_value",
+    "only_precommits_are_tallied",
+    "no_vote_at_an_undefined_round_is_tallied",
+    "every_output_carries_the_round_of_its_votes",
+    "threshold_answers_survive_pruning",
+    "a_pruned_round_never_re_reports_its_thresholds",
+    "pruning_drops_exactly_the_rounds_below_min_round",
+    "two_disjoint_vote_quorums_are_both_reported",
+    "threshold_is_strict_at_the_boundary",
+]
+
+[[components.fast-vote-keeper.oracle.studio.adversaryDispositions]]
+row = "Equivocating votes (same validator, same round, different value) — diverted to EvidenceMap"
+disposition = "modeled"
+
+[components.fast-vote-keeper.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["FastVoteKeeperapply_vote"]
+observations = [
+    "equivocation_recorded",
+    "equivocation_pair_deduplicated",
+    "equivocation_cap_reached",
+    "equivocation_missed_after_prune",
+]
+properties = [
+    "equivocation_never_manufactures_a_quorum",
+    "threshold_answers_survive_pruning",
+]
+
+[[components.fast-vote-keeper.oracle.studio.adversaryDispositions]]
+row = "Duplicate identical vote replayed — returns no output, weight not double-counted"
+disposition = "modeled"
+
+[components.fast-vote-keeper.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["FastVoteKeeperapply_vote"]
+observations = ["duplicate_vote_ignored"]
+properties = [
+    "equivocation_never_manufactures_a_quorum",
+    "each_output_fires_at_most_once_per_round_kind_value",
+]
+
+[[components.fast-vote-keeper.oracle.studio.adversaryDispositions]]
+row = "Votes from unknown / non-validator addresses"
+disposition = "modeled"
+
+[components.fast-vote-keeper.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["FastVoteKeeperapply_vote"]
+observations = ["unknown_voter_discarded"]
+properties = [
+    "equivocation_never_manufactures_a_quorum",
+    "every_output_carries_the_round_of_its_votes",
+]
+
+[[components.fast-vote-keeper.oracle.studio.adversaryDispositions]]
+row = "Uneven voting power where a single vote crosses both 2f+1 and n−f at once"
+disposition = "modeled"
+
+[components.fast-vote-keeper.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["FastVoteKeeperapply_vote"]
+observations = [
+    "both_quorums_from_one_vote",
+    "value_at_exact_quorum_boundary",
+    "value_at_exact_decision_boundary",
+]
+properties = [
+    "both_thresholds_are_reported_independently",
+    "decision_quorum_implies_its_vote_quorum",
+    "threshold_is_strict_at_the_boundary",
+]
+
+[[components.fast-vote-keeper.oracle.studio.adversaryDispositions]]
+row = "Nil votes inflating the quorum-any tally toward n−f without any value reaching a threshold"
+disposition = "modeled"
+
+[components.fast-vote-keeper.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["FastVoteKeeperapply_vote"]
+observations = [
+    "quorum_any_without_any_value_quorum",
+    "quorum_any_emitted",
+]
+properties = [
+    "every_output_carries_the_round_of_its_votes",
+    "threshold_is_strict_at_the_boundary",
+]
+
+[[components.fast-vote-keeper.oracle.studio.adversaryDispositions]]
+row = "Votes at arbitrarily high rounds creating unbounded per_round entries"
+disposition = "modeled"
+
+[components.fast-vote-keeper.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "FastVoteKeeperapply_vote",
+    "FastVoteKeeperprune_votes",
+]
+observations = [
+    "round_pruned",
+    "nil_round_discarded",
+]
+properties = [
+    "no_vote_at_an_undefined_round_is_tallied",
+    "pruning_drops_exactly_the_rounds_below_min_round",
+]
+
+[[components.fast-vote-keeper.oracle.studio.adversaryDispositions]]
+row = "Votes arriving for a round already pruned"
+disposition = "modeled"
+
+[components.fast-vote-keeper.oracle.studio.adversaryDispositions.groundedBy]
+actions = [
+    "FastVoteKeeperapply_vote",
+    "FastVoteKeeperprune_votes",
+]
+observations = [
+    "vote_retallied_after_prune",
+    "pruned_round_emits_nothing_again",
+    "equivocation_missed_after_prune",
+]
+properties = [
+    "threshold_answers_survive_pruning",
+    "a_pruned_round_never_re_reports_its_thresholds",
+]
+
+[components.fast-vote-keeper.fingerprints]
+spec = "fnv1a64:068eb86ad028dbdf"
+oracle = "fnv1a64:64e10a14d7364d91"
+coverage = "fnv1a64:761db555c68e3baa"
+
+[components.fast-vote-keeper.fingerprints.code]
+"code/crates/core-votekeeper/src/fast/keeper.rs" = "fnv1a64:7354039dfdc8c1a2"
+"code/crates/core-votekeeper/src/fast/mod.rs" = "fnv1a64:38cdc747ffb348a6"
+"code/crates/core-votekeeper/src/fast/params.rs" = "fnv1a64:0f4f50980dbeefc5"
+
+[components.fast-vote-keeper.fingerprints.instrumented]
+"quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
+"quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
+"quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
+"quint-specs/oracle-client/rust/src/lib.rs" = "fnv1a64:7d13f0968325a5d8"
+"quint-specs/oracle-client/rust/src/live.rs" = "fnv1a64:0c96171212feb445"
+"quint-specs/oracle-client/rust/src/live/event.rs" = "fnv1a64:b610035d6435249f"
+"quint-specs/oracle-client/rust/src/live/registry.rs" = "fnv1a64:bf4890ead6ba9d19"
+"quint-specs/oracle-client/rust/src/live/transport.rs" = "fnv1a64:8712d4e9bdf961d7"
+"quint-specs/oracle-client/rust/src/live/value.rs" = "fnv1a64:7c5a5dd102552994"
+"quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
+"quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
+
+[[components.fast-vote-keeper.findingVerdicts]]
+subject = "obs:equivocation_missed_after_prune"
+outcome = "bug-reproduced"
+at = 1789129560
 
 [components.message-codec]
 name = "Message Codec"

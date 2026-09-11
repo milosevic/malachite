@@ -17,7 +17,7 @@ module FastRoundStateMachineCoverage {
   /// @replayable false
   run faststateMachineapply =
     init
-      // unpinned args: inputTag="ProposalAndDecisionQuorum", input_round=5, nround=5, ppol=-1, proposer="a", pround=2, pvalue="2a", sawaiting=false, sdround=-1, sdvalue="v", sround=5, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="ProposalAndDecisionQuorum", input_round=5, nround=5, ppol=-1, proposer="a", pround=2, pvalue="2a", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=5, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(decided_on_fresh_proposal)
       .expect(decided_on_a_proposal_from_another_round)
@@ -26,7 +26,7 @@ module FastRoundStateMachineCoverage {
   /// @replayable false
   run faststateMachineapply2 =
     init
-      // unpinned args: inputTag="ProposalAndDecisionQuorum", input_round=5, nround=5, ppol=1, proposer="a", pround=5, pvalue="2a", sawaiting=false, sdround=-1, sdvalue="v", sround=5, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="ProposalAndDecisionQuorum", input_round=5, nround=5, ppol=1, proposer="a", pround=5, pvalue="2a", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=5, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(decision_refused_for_a_reproposal)
 
@@ -34,155 +34,218 @@ module FastRoundStateMachineCoverage {
   /// @replayable false
   run faststateMachineapply3 =
     init
-      // unpinned args: inputTag="ProposalAndDecisionQuorum", input_round=5, nround=5, ppol=-1, proposer="a", pround=3, pvalue="63", sawaiting=false, sdround=2, sdvalue="2a", sround=5, sscheduled=0, sstep="Commit", svalue="v", svround=-1
+      // unpinned args: inputTag="ProposalAndDecisionQuorum", input_round=5, nround=5, ppol=-1, proposer="a", pround=3, pvalue="63", sarmed=0, sawaiting=false, sdround=2, sdvalue="2a", sround=5, sscheduled=0, sstep="Commit", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(decision_refused_in_commit_step)
 
-  /// @covered_by later_round_proposer_waits_for_valid
+  /// @covered_by a_vote_quorum_for_a_future_round_is_refused
   /// @replayable false
   run faststateMachineapply4 =
     init
-      // unpinned args: inputTag="NewRound", input_round=3, nround=3, ppol=-1, proposer="a", pround=-1, pvalue="v", sawaiting=false, sdround=-1, sdvalue="v", sround=-1, sscheduled=0, sstep="Unstarted", svalue="v", svround=-1
+      // unpinned args: inputTag="VoteQuorumForValue", input_round=0, nround=0, ppol=-1, proposer="a", pround=9, pvalue="4", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(input_fell_through_to_invalid)
+
+  /// @covered_by later_round_proposer_waits_for_valid
+  /// @replayable false
+  run faststateMachineapply5 =
+    init
+      // unpinned args: inputTag="NewRound", input_round=3, nround=3, ppol=-1, proposer="a", pround=-1, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=-1, sscheduled=0, sstep="Unstarted", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(later_round_proposer_waits_for_valid)
 
   /// @covered_by non_proposer_schedules_the_propose_timeout
   /// @replayable false
-  run faststateMachineapply5 =
+  run faststateMachineapply6 =
     init
-      // unpinned args: inputTag="NewRound", input_round=0, nround=0, ppol=-1, proposer="b", pround=-1, pvalue="v", sawaiting=false, sdround=-1, sdvalue="v", sround=-1, sscheduled=0, sstep="Unstarted", svalue="v", svround=-1
+      // unpinned args: inputTag="NewRound", input_round=0, nround=0, ppol=-1, proposer="b", pround=-1, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=-1, sscheduled=0, sstep="Unstarted", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(non_proposer_scheduled_propose_timeout)
 
   /// @covered_by precommit_timeout_after_a_decision_does_nothing
   /// @replayable false
-  run faststateMachineapply6 =
+  run faststateMachineapply7 =
     init
-      // unpinned args: inputTag="TimeoutPrecommit", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="v", sawaiting=false, sdround=2, sdvalue="1", sround=2, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="TimeoutPrecommit", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="v", sarmed=0, sawaiting=false, sdround=2, sdvalue="1", sround=2, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(precommit_timeout_after_a_decision_ignored)
       .expect(input_fell_through_to_invalid)
 
   /// @covered_by precommit_timeout_starts_the_next_round
   /// @replayable false
-  run faststateMachineapply7 =
+  run faststateMachineapply8 =
     init
-      // unpinned args: inputTag="TimeoutPrecommit", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="v", sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="TimeoutPrecommit", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(precommit_timeout_started_the_next_round)
 
+  /// @covered_by re_proposal_at_an_equal_valid_round_replaces_the_held_value
   /// @covered_by re_proposal_with_recent_enough_justification_is_accepted
   /// @replayable false
-  run faststateMachineapply8 =
+  run faststateMachineapply9 =
     init
-      // unpinned args: inputTag="ProposalAndVoteQuorumPrevious", input_round=4, nround=4, ppol=2, proposer="a", pround=4, pvalue="9", sawaiting=false, sdround=-1, sdvalue="v", sround=4, sscheduled=0, sstep="Propose", svalue="4d", svround=1
+      // unpinned args: inputTag="ProposalAndVoteQuorumPrevious", input_round=4, nround=4, ppol=2, proposer="a", pround=4, pvalue="9", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=4, sscheduled=0, sstep="Propose", svalue="4d", svround=1
       .then(faststate_machineapply)
       .expect(reproposal_accepted_raising_valid)
 
   /// @covered_by re_proposal_with_stale_justification_is_refused
   /// @replayable false
-  run faststateMachineapply9 =
+  run faststateMachineapply10 =
     init
-      // unpinned args: inputTag="ProposalAndVoteQuorumPrevious", input_round=5, nround=5, ppol=1, proposer="a", pround=5, pvalue="9", sawaiting=false, sdround=-1, sdvalue="v", sround=5, sscheduled=0, sstep="Propose", svalue="4d", svround=4
+      // unpinned args: inputTag="ProposalAndVoteQuorumPrevious", input_round=5, nround=5, ppol=1, proposer="a", pround=5, pvalue="9", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=5, sscheduled=0, sstep="Propose", svalue="4d", svround=4
       .then(faststate_machineapply)
       .expect(reproposal_refused_on_stale_justification)
 
   /// @covered_by re_proposal_with_a_future_justification_is_rejected
   /// @replayable false
-  run faststateMachineapply10 =
+  run faststateMachineapply11 =
     init
-      // unpinned args: inputTag="ProposalAndVoteQuorumPrevious", input_round=2, nround=2, ppol=3, proposer="a", pround=2, pvalue="9", sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="ProposalAndVoteQuorumPrevious", input_round=2, nround=2, ppol=3, proposer="a", pround=2, pvalue="9", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(reproposal_rejected_for_malformed_valid_round)
 
   /// @covered_by round_zero_proposer_asks_for_a_value
   /// @replayable false
-  run faststateMachineapply11 =
+  run faststateMachineapply12 =
     init
-      // unpinned args: inputTag="NewRound", input_round=0, nround=0, ppol=-1, proposer="a", pround=-1, pvalue="v", sawaiting=false, sdround=-1, sdvalue="v", sround=-1, sscheduled=0, sstep="Unstarted", svalue="v", svround=-1
+      // unpinned args: inputTag="NewRound", input_round=0, nround=0, ppol=-1, proposer="a", pround=-1, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=-1, sscheduled=0, sstep="Unstarted", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(round_zero_proposer_asked_for_value)
 
   /// @covered_by vote_quorum_never_lowers_valid
   /// @replayable false
-  run faststateMachineapply12 =
+  run faststateMachineapply13 =
     init
-      // unpinned args: inputTag="VoteQuorumForValue", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="2", sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="1", svround=2
+      // unpinned args: inputTag="VoteQuorumForValue", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="2", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="1", svround=2
       .then(faststate_machineapply)
       .expect(vote_quorum_did_not_raise_valid)
 
   /// @covered_by vote_quorum_raises_valid
   /// @replayable false
-  run faststateMachineapply13 =
+  run faststateMachineapply14 =
     init
-      // unpinned args: inputTag="VoteQuorumForValue", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="5", sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="VoteQuorumForValue", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="5", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(vote_quorum_raised_valid)
 
   /// @covered_by bound_node_votes_for_a_fresh_proposal_matching_its_valid
   /// @replayable false
-  run faststateMachineapply14 =
+  run faststateMachineapply15 =
     init
-      // unpinned args: inputTag="Proposal", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="2a", sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="2a", svround=1
+      // unpinned args: inputTag="Proposal", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="2a", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="2a", svround=1
       .then(faststate_machineapply)
       .expect(voted_for_fresh_proposal_matching_valid)
 
   /// @covered_by unbound_node_votes_for_a_fresh_proposal
   /// @replayable false
-  run faststateMachineapply15 =
+  run faststateMachineapply16 =
     init
-      // unpinned args: inputTag="Proposal", input_round=0, nround=0, ppol=-1, proposer="a", pround=0, pvalue="2a", sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="Proposal", input_round=0, nround=0, ppol=-1, proposer="a", pround=0, pvalue="2a", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(voted_for_unbound_fresh_proposal)
 
   /// @covered_by bound_node_votes_nil_for_a_conflicting_fresh_proposal
   /// @replayable false
-  run faststateMachineapply16 =
+  run faststateMachineapply17 =
     init
-      // unpinned args: inputTag="Proposal", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="2a", sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="7", svround=1
+      // unpinned args: inputTag="Proposal", input_round=2, nround=2, ppol=-1, proposer="a", pround=2, pvalue="2a", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=2, sscheduled=0, sstep="Propose", svalue="7", svround=1
       .then(faststate_machineapply)
       .expect(voted_nil_because_bound_to_another_value)
 
   /// @covered_by invalid_proposal_draws_a_nil_vote
   /// @replayable false
-  run faststateMachineapply17 =
+  run faststateMachineapply18 =
     init
-      // unpinned args: inputTag="InvalidProposal", input_round=0, nround=0, ppol=-1, proposer="a", pround=0, pvalue="v", sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="InvalidProposal", input_round=0, nround=0, ppol=-1, proposer="a", pround=0, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(voted_nil_on_invalid_proposal)
 
   /// @covered_by propose_timeout_votes_nil
   /// @replayable false
-  run faststateMachineapply18 =
+  run faststateMachineapply19 =
     init
-      // unpinned args: inputTag="TimeoutPropose", input_round=0, nround=0, ppol=-1, proposer="a", pround=0, pvalue="v", sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="TimeoutPropose", input_round=0, nround=0, ppol=-1, proposer="a", pround=0, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(voted_nil_on_propose_timeout)
 
   /// @covered_by wait_for_valid_expiry_lets_the_proposer_propose
   /// @replayable false
-  run faststateMachineapply19 =
+  run faststateMachineapply20 =
     init
-      // unpinned args: inputTag="WaitForValidExpired", input_round=3, nround=3, ppol=-1, proposer="a", pround=3, pvalue="v", sawaiting=true, sdround=-1, sdvalue="v", sround=3, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="WaitForValidExpired", input_round=3, nround=3, ppol=-1, proposer="a", pround=3, pvalue="v", sarmed=0, sawaiting=true, sdround=-1, sdvalue="v", sround=3, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(wait_for_valid_expired_and_proposed)
 
+  /// @covered_by a_vote_quorum_from_the_previous_round_ends_the_wait
   /// @covered_by vote_quorum_while_waiting_makes_the_proposer_repropose
   /// @replayable false
-  run faststateMachineapply20 =
+  run faststateMachineapply21 =
     init
-      // unpinned args: inputTag="VoteQuorumForValue", input_round=3, nround=3, ppol=-1, proposer="a", pround=3, pvalue="8", sawaiting=true, sdround=-1, sdvalue="v", sround=3, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="VoteQuorumForValue", input_round=3, nround=3, ppol=-1, proposer="a", pround=2, pvalue="8", sarmed=0, sawaiting=true, sdround=-1, sdvalue="v", sround=3, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(waiting_proposer_reproposed_on_vote_quorum)
 
-  /// @covered_by quorum_any_arms_the_precommit_timeout_once
+  /// @covered_by a_decided_node_does_not_enter_a_new_round
   /// @replayable false
   run faststateMachineapplyFaststateMachineapply =
     init
-      // unpinned args: inputTag="QuorumAny", input_round=1, nround=1, ppol=-1, proposer="a", pround=1, pvalue="v", sawaiting=false, sdround=-1, sdvalue="v", sround=1, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="ProposalAndDecisionQuorum", input_round=4, nround=4, ppol=-1, proposer="a", pround=4, pvalue="7", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=4, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(decided_on_fresh_proposal)
+      // unpinned args: inputTag="NewRound", input_round=5, nround=5, ppol=-1, proposer="a", pround=4, pvalue="v", sarmed=0, sawaiting=false, sdround=4, sdvalue="7", sround=4, sscheduled=0, sstep="Commit", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(input_fell_through_to_invalid)
+
+  /// @covered_by quorum_any_arms_the_precommit_timeout_once
+  /// @replayable false
+  run faststateMachineapplyFaststateMachineapply2 =
+    init
+      // unpinned args: inputTag="QuorumAny", input_round=1, nround=1, ppol=-1, proposer="a", pround=1, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=1, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(precommit_timeout_armed_on_quorum_any)
-      // unpinned args: inputTag="QuorumAny", input_round=1, nround=1, ppol=-1, proposer="a", pround=1, pvalue="v", sawaiting=false, sdround=-1, sdvalue="v", sround=1, sscheduled=2, sstep="Propose", svalue="v", svround=-1
+      // unpinned args: inputTag="QuorumAny", input_round=1, nround=1, ppol=-1, proposer="a", pround=1, pvalue="v", sarmed=4, sawaiting=false, sdround=-1, sdvalue="v", sround=1, sscheduled=0, sstep="Propose", svalue="v", svround=-1
       .then(faststate_machineapply)
       .expect(quorum_any_repeat_armed_nothing)
+
+  /// @covered_by a_decided_node_that_was_waiting_does_not_repropose
+  /// @replayable false
+  run faststateMachineapplyFaststateMachineapplyFaststateMachineapply =
+    init
+      // unpinned args: inputTag="NewRound", input_round=3, nround=3, ppol=-1, proposer="a", pround=-1, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=-1, sscheduled=0, sstep="Unstarted", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(later_round_proposer_waits_for_valid)
+      // unpinned args: inputTag="ProposalAndDecisionQuorum", input_round=3, nround=3, ppol=-1, proposer="a", pround=1, pvalue="7", sarmed=0, sawaiting=true, sdround=-1, sdvalue="v", sround=3, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(decided_on_fresh_proposal)
+      .expect(decided_on_a_proposal_from_another_round)
+      // unpinned args: inputTag="VoteQuorumForValue", input_round=3, nround=3, ppol=-1, proposer="a", pround=3, pvalue="9", sarmed=0, sawaiting=false, sdround=1, sdvalue="7", sround=3, sscheduled=0, sstep="Commit", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(vote_quorum_raised_valid)
+
+  /// @covered_by quorum_any_arms_each_round_separately
+  /// @replayable false
+  run faststateMachineapplyFaststateMachineapplyFaststateMachineapply2 =
+    init
+      // unpinned args: inputTag="QuorumAny", input_round=0, nround=0, ppol=-1, proposer="a", pround=0, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(precommit_timeout_armed_on_quorum_any)
+      // unpinned args: inputTag="QuorumAny", input_round=0, nround=1, ppol=-1, proposer="a", pround=0, pvalue="v", sarmed=2, sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(quorum_any_from_a_higher_round)
+      // unpinned args: inputTag="QuorumAny", input_round=0, nround=1, ppol=-1, proposer="a", pround=0, pvalue="v", sarmed=6, sawaiting=false, sdround=-1, sdvalue="v", sround=0, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(quorum_any_repeat_armed_nothing)
+
+  /// @covered_by same_round_new_round_cannot_reset_the_step_and_allow_a_second_vote
+  /// @replayable false
+  run faststateMachineapplyFaststateMachineapplyFaststateMachineapply3 =
+    init
+      // unpinned args: inputTag="Proposal", input_round=4, nround=4, ppol=-1, proposer="a", pround=4, pvalue="7", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=4, sscheduled=0, sstep="Propose", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(voted_for_unbound_fresh_proposal)
+      // unpinned args: inputTag="NewRound", input_round=4, nround=4, ppol=-1, proposer="a", pround=4, pvalue="v", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=4, sscheduled=0, sstep="Precommit", svalue="v", svround=-1
+      .then(faststate_machineapply)
+      .expect(input_fell_through_to_invalid)
+      // unpinned args: inputTag="Proposal", input_round=4, nround=4, ppol=-1, proposer="a", pround=4, pvalue="9", sarmed=0, sawaiting=false, sdround=-1, sdvalue="v", sround=4, sscheduled=0, sstep="Precommit", svalue="v", svround=-1
+      .then(faststate_machineapply)
 }
