@@ -285,6 +285,46 @@ distinction plus certificate semantics.
 
 ---
 
+## Working loop (Zarko, 2026-09-11): review BEFORE Studio
+
+Every piece of code written for this change goes through the same three steps, in order:
+
+1. **Write it.**
+2. **Independent adversarial review.** A reviewer agent with the verbatim Algorithm 1
+   transcription as ground truth, explicitly barred from treating the implementation's own
+   tests as authority — they share an author and a reading of the paper with the code, so
+   they cannot catch a shared misreading. Read-only, and barred from Studio so it cannot
+   disturb a pipeline.
+3. **Fix everything it finds**, with a regression test per fix.
+4. **Then** set the component up in Studio, or re-sync it if it already exists.
+
+Why this order, from measured results on `fast-round-state-machine`:
+
+| Source | Bugs found | Cost |
+| --- | --- | --- |
+| Independent reviewer | **4 definite**, including the two most severe | ~6 min |
+| Quint Studio | 2 real (one with a generated reproducing test) | ~90 min per pipeline |
+| The compiler | 1 | seconds |
+| The module's own 27 tests | **0** | — |
+
+The reviewer found a node able to vote twice in one round, and a `<` where L29-L30 needs
+`≤` whose significance depends on knowing that two `2f+1` quorums need not intersect when
+`n > 5f`. Neither the model nor the tests caught either.
+
+Reviewing first also keeps Studio's work from being wasted: a pipeline run against code
+that is about to change produces a model that is stale on arrival, and the re-sync costs
+another full run.
+
+What each is actually good for, on this evidence:
+
+- **The reviewer** catches divergence from the paper, and reasons about *why* a rule is
+  written the way it is. Cheap enough to run on every change.
+- **Studio** catches what a reader cannot: unreachable code, an invariant enforced only by
+  one code path while the public API bypasses it, and behaviour a test suite never reaches.
+  It also generates a reproducing test for a finding, and diagnoses its own specs — three
+  of four property violations here turned out to be model defects, and it said so.
+- **The tests** guard against regression and nothing else.
+
 ## 3. Staged plan
 
 **Stage 1 and Stage 2 contend for the same files — Stage 2 goes FIRST.** Stage 1 edits
