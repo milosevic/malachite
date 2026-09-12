@@ -317,6 +317,7 @@ name = "arc-malachitebft-core-types"
 version = "0.8.0"
 dependencies = [
  "arc-malachitebft-peer",
+ "arc-malachitebft-test",
  "async-trait",
  "borsh",
  "bytes",
