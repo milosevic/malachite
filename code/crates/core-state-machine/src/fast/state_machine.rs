@@ -406,6 +406,13 @@ where
     state.update_round(round);
     state = state.with_step(Step::Propose);
 
+    // `awaiting_valid` is scoped to the round that set it: it means "we propose THIS round
+    // and are waiting to learn a valid value first" (L10-L11). Entering any round clears
+    // it, and only the proposer branch below sets it again. Without this it survives into
+    // a round we do not propose, and the L36 guard at `VoteQuorumForValue` — which is
+    // `awaiting_valid && is_proposer()` — would rest entirely on the proposer field.
+    state.awaiting_valid = false;
+
     if !info.is_proposer() {
         // L18.
         return if state.check_timeout(TimeoutKind::Propose) {

@@ -69,8 +69,9 @@ pub struct Driver<Ctx: Context> {
     ctx: Ctx,
     address: Ctx::Address,
     validator_set: Ctx::ValidatorSet,
-    /// The proposer of the round we are at. Only `Input::NewRound` writes it, so it can
-    /// never describe a round other than the one we last entered.
+    /// The proposer of the round we are at. Only `Input::NewRound` writes it, and only
+    /// when the state machine actually enters the round — a refused `NewRound` restores
+    /// the previous value — so it always describes the round `round_state` is in.
     proposer: Ctx::Address,
     vote_keeper: FastVoteKeeper<Ctx>,
     proposals: FreshProposals<Ctx>,
@@ -305,10 +306,21 @@ impl<Ctx: Context> Driver<Ctx> {
     fn process_inner(&mut self, input: Input<Ctx>) -> Vec<Output<Ctx>> {
         match input {
             Input::NewRound(round, proposer) => {
-                // Recorded before `apply_round`, because `start_round` reads it through
-                // `Info::is_proposer` on this very call.
-                self.proposer = proposer;
-                self.apply_round(RoundInput::NewRound(round), round)
+                // The proposer has to be in place before `apply_round`, because
+                // `start_round` reads it through `Info::is_proposer` on this very call.
+                //
+                // But the state machine REFUSES a `NewRound` for a round at or below the
+                // one we are in, and for any round at all once we have decided. A refused
+                // input must not leave us holding the proposer of a round we never
+                // entered: every later input reads this field through `Info`, so a
+                // duplicated, replayed or stale `NewRound` would otherwise desynchronize
+                // it from `round_state.round` permanently. So it is restored on refusal.
+                let previous = core::mem::replace(&mut self.proposer, proposer);
+                let (outputs, entered) = self.apply_round_checked(RoundInput::NewRound(round), round);
+                if !entered {
+                    self.proposer = previous;
+                }
+                outputs
             }
 
             Input::ProposeValue(round, value) => {
@@ -434,6 +446,17 @@ impl<Ctx: Context> Driver<Ctx> {
 
     /// Apply one round input and resolve the state machine's outputs.
     fn apply_round(&mut self, input: RoundInput<Ctx>, input_round: Round) -> Vec<Output<Ctx>> {
+        self.apply_round_checked(input, input_round).0
+    }
+
+    /// As [`Driver::apply_round`], but also reports whether the state machine accepted the
+    /// input. Only the `NewRound` path needs that: it is the one input that writes driver
+    /// state of its own before applying, and so the one that must undo it on refusal.
+    fn apply_round_checked(
+        &mut self,
+        input: RoundInput<Ctx>,
+        input_round: Round,
+    ) -> (Vec<Output<Ctx>>, bool) {
         let info = Info::new(input_round, &self.address, &self.proposer);
         // The height is read before the state is taken: reading through `self` inside the
         // replace would borrow what is already mutably borrowed.
@@ -442,11 +465,13 @@ impl<Ctx: Context> Driver<Ctx> {
 
         let transition = apply(&self.ctx, state, &info, input);
         self.round_state = transition.next_state;
+        let valid = transition.valid;
 
-        match transition.output {
+        let outputs = match transition.output {
             None => Vec::new(),
             Some(output) => self.resolve(output).into_iter().collect(),
-        }
+        };
+        (outputs, valid)
     }
 
     /// Turn a round-state-machine output into a driver output.

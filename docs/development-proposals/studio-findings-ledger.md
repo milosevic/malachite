@@ -44,7 +44,7 @@ independent reviewer, not by Studio or by the tests.
 | F-32a | An unbuildable re-proposal stalled the proposer — no proposal, no timeout, no wait | reviewer (round 5) | high | `1d51e828` | next commit | **fixed** (interim; needs the id-carrying proposal type) |
 | F-32b | An unpairable decision quorum was lost forever, and my test pinned it as intended | reviewer (round 5) | high | `1d51e828` | next commit | **fixed** |
 | F-32c | Proposals the application rejected were retained and could supply a decision | reviewer (round 5) | medium | `1d51e828` | next commit | **fixed** |
-| F-32d | One `proposer` field answers for every input round | reviewer (round 5) | medium | `1d51e828` | next commit | **fixed** — proposer folded into `Input::NewRound` |
+| F-32d | One `proposer` field answers for every input round | reviewer (round 5) | medium | `1d51e828` | `59038473` + next commit | **fixed** — first attempt was incomplete, see F-36a |
 | F-33a | Oracle address→letter mapping aliases two validators onto `a` when the node is outside its own validator set | me (gate review) | low | `ac4916df` | — | **open** — instrumentation-only, unreachable in current tests |
 | F-33b | Five decision-path observations were unreachable in the fast-driver validation battery | studio (fast-driver, instrumentation) | low | `ac4916df` | `ac4916df`+ | **fixed by Studio** — two search-guidance arms added |
 | F-33c | `keeper_outputs_keep_their_reported_round` is a tautology — it compares a value with itself | me (ran the check the worker owed) | medium | `ac4916df` | — | **confirmed vacuous; must be dropped** |
@@ -56,6 +56,9 @@ independent reviewer, not by Studio or by the tests.
 | F-35b | Generated configs emit `protocol` but no reference config or doc mentions it | reviewer (round 6) | medium | `59038473` | next commit | **fixed** |
 | F-35c | The `fast` refusal fired after the network listener and WAL were already open | reviewer (round 6) | low | `59038473` | next commit | **fixed** |
 | F-35d | Nothing tested the refusal itself — the whole no-silent-downgrade guarantee was unguarded | reviewer (round 6) | low | `59038473` | next commit | **fixed** |
+| F-36a | My F-32d fix was incomplete: a **refused** `NewRound` still overwrote the proposer, so both original failure modes stayed reachable | reviewer (round 7) | high | `59038473` | next commit | **fixed** |
+| F-36b | `awaiting_valid` is not round-scoped — it survives into a round we do not propose, refuting my inheritance argument | reviewer (round 7) | medium | `59038473` | next commit | **fixed** |
+| F-36c | Doc comment asserting the proposer "can never describe a round other than the one we last entered" was false | reviewer (round 7) | low | `59038473` | next commit | **fixed** |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -1288,4 +1291,79 @@ classic path already uses, and must not hand the driver raw gossip.
 Downgraded from an open finding to a documented precondition. [F-01] stays open on its own
 merits — that one is a genuine unbounded *evidence* store on the classic path, with no
 upstream gate behind it.
+
+## F-36 — Seventh review: my F-32d fix did not do what I said it did
+
+- **Found against:** `59038473` · **Fixed in:** the commit that follows · **Source:**
+  independent reviewer, seventh round, with executable probes
+
+I claimed in `59038473` that the F-32d hazard was "unrepresentable rather than guarded".
+**That was wrong, and the reviewer reproduced both original failure modes against the
+fixed code.** Five of six areas came back clean; this one did not.
+
+### F-36a — DEFINITE/High. A refused `NewRound` still took the proposer with it
+The fix wrote `self.proposer = proposer` before `apply_round` and never undid it. But the
+state machine *refuses* most `NewRound` inputs — it enters a round only when
+`state.round < round` (or `<=` from `Unstarted`), and only while undecided; everything
+else falls to `Transition::invalid`, leaving `state.round` untouched. `apply_round`
+discarded `transition.valid`, so the driver never learned the round had been refused.
+
+Any duplicated, replayed or stale `NewRound` — WAL replay, a repeated `Output::NewRound`,
+a post-decision round drive — therefore desynchronized `proposer` from
+`round_state.round` **permanently**, and every later input reads it through `Info`. Both
+directions of F-32d came back:
+
+- **We miss our own slot.** Propose round 0, then a duplicate `NewRound(0, a[3])` is
+  refused but overwrites the proposer. The application's `ProposeValue` then produces
+  nothing — the `is_proposer()` conjunct is false — and we stall our own round with no
+  proposal and no further output.
+- **We propose a round we do not own.** Round 1 as proposer, round 2 as non-proposer, then
+  a stale `NewRound(2, us)`. The L36 guard `awaiting_valid && is_proposer()` passes and we
+  broadcast a re-proposal for round 2 naming *itself* as its own justification — which
+  every receiver rejects.
+
+**Fixed** by restoring the previous proposer when the state machine refuses the input.
+`apply_round_checked` now reports `transition.valid`; `apply_round` delegates to it.
+
+### F-36b — DEFINITE/Medium. My inheritance argument was refuted
+In the F-32d analysis I argued the `VoteQuorumForValue` guard "inherits its correctness
+from `awaiting_valid`, which can only be set on the proposer path of `start_round`". The
+reviewer showed the flag is set there but **never cleared**: `start_round`'s non-proposer
+branch returns without touching it, and `update_round` clears only the timeout bits. So it
+does persist into a round we do not propose.
+
+It was harmless *only* because `propose_now` clears it on every re-entry as proposer, so
+stale-true and `is_proposer`-true never coincided — meaning the guard's entire weight
+rested on the proposer field being right, which is exactly what F-36a broke. The two
+findings are one bug seen from both ends.
+
+**Fixed** by clearing `awaiting_valid` on entering any round, before the proposer branch.
+It is now round-scoped by construction rather than by the accident of who clears it.
+
+### Both fixes are pinned, and the pins were checked against the mutants
+`a_refused_new_round_does_not_take_the_proposer_with_it` and
+`a_refused_new_round_cannot_make_us_propose_someone_elses_round` reproduce the reviewer's
+two probes. Reverting the fixes:
+
+| | both reverted | only `awaiting_valid` restored | both restored |
+| --- | --- | --- | --- |
+| probe A (miss our slot) | **fail** | **fail** | pass |
+| probe B (propose another's round) | **fail** | pass | pass |
+
+which matches the reviewer's claim that clearing `awaiting_valid` independently kills
+probe B.
+
+**My first version of probe B was worthless and I nearly committed it.** It asserted "no
+`Proposal` output" without first delivering a proposal for the driver to re-propose — so
+`resolve` could not have built one regardless, and the test passed with **both fixes
+reverted**. Caught only because I ran it against the mutant instead of trusting a green
+result. This is the third artifact in this project that could not fail ([F-34a] the
+generated tests, [F-33c] the generated property), and the first one that was mine.
+
+### The lesson worth keeping
+The F-32d analysis was careful, traced all four `is_proposer()` sites, produced a table,
+and reached a conclusion that was **wrong in a way the analysis itself could not see**: I
+reasoned about which *state machine* arms consult the proposer, and never asked what the
+*driver* does when the state machine says no. A reviewer with executable probes found in
+one pass what a table could not.
 

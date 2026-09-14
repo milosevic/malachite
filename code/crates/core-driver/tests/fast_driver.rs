@@ -395,3 +395,72 @@ fn the_proposer_of_the_previous_round_does_not_answer_for_the_next() {
         "L18: a non-proposer waits for the proposal under a propose timeout, got {out:?}"
     );
 }
+
+/// A `NewRound` the state machine refuses must not leave the driver holding that round's
+/// proposer. The state machine enters a round only when it is above the current one (and
+/// only while undecided); everything else is ignored. Since every later input reads the
+/// proposer through `Info`, a duplicated, replayed or stale `NewRound` would otherwise
+/// desynchronize it from the round we are actually in — permanently.
+///
+/// Here: we propose round 0, then a duplicate `NewRound(0, a[3])` arrives. It is refused,
+/// so we must still be able to propose when the application hands us a value.
+#[test]
+fn a_refused_new_round_does_not_take_the_proposer_with_it() {
+    let (a, mut d) = driver_with(true);
+    let out = d.process(Input::NewRound(Round::new(0), a[0]));
+    assert!(
+        out.iter()
+            .any(|o| matches!(o, Output::GetValueAndScheduleTimeout(..))),
+        "we propose round 0, got {out:?}"
+    );
+
+    // Refused: the state machine only enters a round above the one it is in.
+    let out = d.process(Input::NewRound(Round::new(0), a[3]));
+    assert!(out.is_empty(), "re-entering the current round is ignored, got {out:?}");
+
+    // We are still round 0's proposer, so the value we asked for must still be proposed.
+    let out = d.process(Input::ProposeValue(Round::new(0), Value::new(7)));
+    assert!(
+        out.iter().any(|o| matches!(o, Output::Proposal(_))),
+        "the refused input must not have cost us our own proposal slot, got {out:?}"
+    );
+}
+
+/// The mirror case: a refused `NewRound` naming *us* must not let us propose a round we do
+/// not own. Two things had to hold for that to happen, and both are now closed:
+/// `awaiting_valid` survived from the round we *did* propose, and the refused input
+/// installed us as proposer of the round we are in. Together they satisfied the L36 guard
+/// `awaiting_valid && is_proposer()`, and we broadcast a re-proposal for someone else's
+/// round — naming itself as its own justification, which every receiver rejects.
+#[test]
+fn a_refused_new_round_cannot_make_us_propose_someone_elses_round() {
+    let (a, mut d) = driver_with(true);
+
+    // Round 1 is ours, and we have no valid value yet, so we wait (L10-L11).
+    let out = d.process(Input::NewRound(Round::new(1), a[0]));
+    assert!(
+        out.iter().any(|o| matches!(o, Output::WaitForValid(_))),
+        "proposer of a round above the first waits to learn a valid value, got {out:?}"
+    );
+
+    // Round 2 belongs to someone else.
+    d.process(Input::NewRound(Round::new(2), a[1]));
+
+    // Their proposal arrives and is retained, so a re-proposal for it is buildable —
+    // without this the driver could not emit one even if it wanted to, and the test
+    // would pass for the wrong reason.
+    d.process(Input::Proposal(fresh(2, 7, a[1]), Validity::Valid));
+
+    // A stale duplicate naming us. Refused — but it used to overwrite the proposer.
+    let out = d.process(Input::NewRound(Round::new(2), a[0]));
+    assert!(out.is_empty(), "re-entering the current round is ignored, got {out:?}");
+
+    // 2f+1 of 6 is 3. This is the input whose L36 guard is `awaiting_valid && is_proposer()`.
+    for i in 1..4 {
+        let out = d.process(Input::Vote(vote(2, 7, a[i])));
+        assert!(
+            !out.iter().any(|o| matches!(o, Output::Proposal(_))),
+            "we do not propose round 2 and must broadcast no proposal for it, got {out:?}"
+        );
+    }
+}
