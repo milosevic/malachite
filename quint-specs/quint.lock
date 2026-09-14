@@ -1,7 +1,7 @@
 version = 1
 
 [survey]
-date = "2026-09-11T10:07:36Z"
+date = "2026-09-14T13:49:54Z"
 schema = 1
 
 [system]
@@ -1836,6 +1836,9 @@ dependencies = [
     "value-sync",
     "equivocation-detection",
     "core-types-domain",
+    "full-proposal-keeper",
+    "vote-extensions",
+    "consensus-protocol-selection",
 ]
 operations = [
     "State::new(ctx, height, validator_set, params, queue_cap, per_height_cap) — constructor (state.rs:60)",
@@ -3096,6 +3099,60 @@ coverage = ""
 "quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
 "quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
 
+[components.consensus-protocol-selection]
+name = "Consensus Protocol Selection"
+description = "The ConsensusProtocol choice (Classic n>3f vs Fast n>5f) as the single source for every threshold — quorum, decision, the honest threshold Fast does not have — plus the advisory fault-budget check on a validator set and the structurally-guaranteed Params that cannot pair a protocol with foreign thresholds."
+role = "cross-cutting"
+rank = 0
+paths = [
+    "crates/core-types/src/consensus_protocol.rs",
+    "crates/core-consensus/src/params.rs",
+]
+tests = [
+    "crates/core-types/tests/consensus_protocol.rs",
+    "crates/core-consensus/tests/protocol_selection.rs",
+]
+dependencies = ["core-types-domain"]
+operations = [
+    "ConsensusProtocol::tolerated_fault_denominator() -> u64 — query; 3 for Classic, 5 for Fast",
+    "ConsensusProtocol::quorum() -> ThresholdParam — query; 2/3 vs 2/5",
+    "ConsensusProtocol::decision() -> ThresholdParam — query; 2/3 vs 4/5",
+    "ConsensusProtocol::honest() -> Option<ThresholdParam> — query; None for Fast, which has no round-skip rule",
+    "ConsensusProtocol::classic_threshold_params() -> Option<ThresholdParams> — query; None for Fast",
+    "ConsensusProtocol::tolerates_at_least_one_fault::<Ctx>(validator_set) -> Result<(), NoFaultTolerance> — query; advisory only",
+    "Params::classic(address, value_payload, enabled) — constructs Params pinned to Classic; protocol field is private",
+    "Params::protocol() -> ConsensusProtocol — query",
+    "Params::threshold_params() -> ThresholdParams — query; derived from the protocol, never set independently",
+]
+headlineProperties = [
+    "Thresholds are derived from the protocol and cannot be set independently of it, so a Fast protocol can never be paired with classic 2/3 thresholds.",
+    "Fast has no honest (f+1) threshold at all — honest() returns None rather than a fraction, so a round-skip rule cannot be reintroduced by accident.",
+    "tolerates_at_least_one_fault is a necessary, not sufficient, condition: it only asks whether one validator already holds the whole budget, and a failing set is intolerant rather than invalid.",
+    "An overflowing power*denominator is reported as PowerOverflow (a malformed set), distinct from SingleValidatorHoldsTheWholeBudget.",
+    "The f < n/d bound is strict: a validator holding exactly the tolerated share already fails the check.",
+]
+adversarySurface = [
+    "A validator set whose voting powers are large enough that largest * denominator overflows u64.",
+    "A validator set with zero validators, or with all voting powers zero.",
+    "A set that tolerates one fault under Classic but none under Fast (e.g. [3,3,3,1]).",
+    "A Fast node and a Classic node on one network: nothing here carries the protocol into genesis, the handshake, or certificate verification, so they would disagree silently at the first quorum.",
+    "classic_threshold_params()'s Option threaded outward and unwrapped at a call site that may be running Fast, turning a mismatch into a panic.",
+]
+specHints = "crates/core-types/src/consensus_protocol.rs:1 the enum and its non-interoperability contract; :19 the explicit gap (no network-wide agreement enforced); :64-:120 the threshold derivations; :126 the ADVISORY fault-tolerance check and what it does not prove; crates/core-consensus/src/params.rs:31 why the protocol field is private"
+cardRead = false
+connectionsRead = false
+spec = ""
+version = 0
+observationsConfirmed = false
+propertiesConfirmed = false
+confirmedObservations = []
+confirmedProperties = []
+retiredObservations = []
+retiredProperties = []
+wireConfirmed = false
+setupCompleted = false
+cardsDone = false
+
 [components.core-types-domain]
 name = "Core Types & Quorum Domain"
 description = "The shared domain model — height, round, vote, proposal, timeouts, validator set, certificates — and the quorum/threshold arithmetic every consensus component depends on."
@@ -3130,7 +3187,10 @@ tests = [
     "code/crates/test/tests/unit/certificates/round.rs",
     "code/crates/test/tests/unit/validator_proof.rs",
 ]
-dependencies = []
+dependencies = [
+    "consensus-protocol-selection",
+    "vote-extensions",
+]
 operations = [
     "ThresholdParam::is_met(weight, total) — query; checked_mul both sides then strict greater-than, panics on overflow (threshold.rs:68-78)",
     "ThresholdParam::min_expected(total) — query; 1 + floor(total*num/den), panics on overflow (threshold.rs:81-87)",
@@ -3398,6 +3458,7 @@ dependencies = [
     "round-state-machine",
     "core-types-domain",
     "equivocation-detection",
+    "consensus-protocol-selection",
 ]
 operations = [
     "Driver::new(ctx, height, validator_set, address, threshold_params) — constructor",
@@ -4516,6 +4577,172 @@ wireConfirmed = false
 setupCompleted = false
 cardsDone = false
 
+[components.fast-driver]
+name = "Fast Tendermint Driver"
+description = "The per-height driver for the n>5f protocol: multiplexes proposals, votes and timeouts into Fast round-state-machine inputs, gates re-proposals on the 2f+1 justification the proposal names, retains only valid fresh proposals so a later n-f quorum can resolve an id back to its value, and fires the symmetric L42 decision from whichever of proposal/quorum arrives second."
+role = "central"
+rank = 0
+paths = [
+    "crates/core-driver/src/fast/driver.rs",
+    "crates/core-driver/src/fast/proposals.rs",
+    "crates/core-driver/src/fast/mod.rs",
+]
+tests = ["crates/core-driver/tests/fast_driver.rs"]
+dependencies = [
+    "fast-round-state-machine",
+    "fast-vote-keeper",
+    "core-types-domain",
+    "consensus-protocol-selection",
+]
+operations = [
+    "Driver::new(ctx, height, validator_set, address, proposer) — constructs the per-height driver",
+    "Driver::process(input) -> Vec<Output> — mutates; the single entry point routing NewRound / ProposeValue / Proposal / Vote / TimeoutElapsed / WaitForValidExpired",
+    "Driver::set_proposer(address) — mutates; sets the proposer for the round being entered",
+    "Driver::round() — query; the current round",
+    "Driver::decision() -> Option<&(Round, Value)> — query; the decided round and value, if any",
+    "Driver::validator_set() — query",
+    "FreshProposals::keep(proposal) -> bool — mutates; retains a valid fresh proposal, returns whether it was newly kept",
+    "FreshProposals::get(value_id) -> Option<&Proposal> — query; resolves an id back to the value a fresh proposal carried",
+    "FreshProposals::clear() — mutates",
+    "FreshProposals::len() / is_empty() — query",
+]
+headlineProperties = [
+    "A re-proposal (pol_round non-nil) reaches the state machine as justified only when the vote keeper actually holds a 2f+1 quorum for that value in the round the proposal names.",
+    "A proposal the application judged invalid is never retained, so an invalid value can never supply the payload for an L42 decision.",
+    "L42 is symmetric: the decision fires whichever of the fresh proposal or the n-f quorum arrives second, never only on the vote edge.",
+    "A decided driver does not re-decide: once decision() is Some, the L42 path is skipped.",
+]
+adversarySurface = [
+    "A proposer sends a re-proposal naming a pol_round whose 2f+1 quorum does not exist.",
+    "A proposal arrives for a value id whose fresh original was never retained (dropped as invalid), leaving an n-f quorum with no resolvable value.",
+    "Votes arrive before the proposal, so the keeper has already latched and will never re-report the threshold.",
+    "Timeout kinds the Fast protocol has no step for (Prevote) are injected as round inputs.",
+]
+specHints = "crates/core-driver/src/fast/driver.rs:111 process; :142 apply_proposal (L20-L34 routing); :168 the 2f+1 re-proposal justification check; :185 the symmetric L42 re-check; crates/core-driver/src/fast/mod.rs:1 the module's own rationale for L27/L42/L15-L16"
+cardRead = false
+connectionsRead = false
+spec = "quint-specs/fast-driver.qnt"
+version = 1
+observationsConfirmed = false
+propertiesConfirmed = false
+confirmedObservations = []
+confirmedProperties = []
+retiredObservations = []
+retiredProperties = []
+wireConfirmed = false
+setupCompleted = false
+cardsDone = false
+
+[components.fast-driver.oracle]
+format = "quint-oracle-config"
+version = 1
+spec = "quint-specs/fast-driver.qnt"
+main = "fast_driver"
+eventScope = "fast-driver"
+observations = [
+    "reproposal_routed_as_justified",
+    "reproposal_routed_as_unjustified",
+    "fresh_proposal_routed_valid",
+    "fresh_proposal_routed_invalid",
+    "invalid_proposal_not_retained",
+    "duplicate_fresh_proposal_not_rekept",
+    "reproposal_not_retained",
+    "decision_fired_on_the_proposal_edge",
+    "decision_fired_on_the_vote_edge",
+    "decision_quorum_waited_for_its_proposal",
+    "repropose_resolved_to_a_full_proposal",
+    "repropose_value_missing",
+    "timeout_kind_without_a_step_ignored",
+    "l42_skipped_because_already_decided",
+    "prevote_discarded_by_the_keeper",
+    "equivocating_vote_not_tallied",
+    "vote_from_a_non_validator_discarded",
+    "fresh_proposal_retained",
+]
+unguidedStepBudget = 10
+stepReplayBudget = 50
+guardScenarios = true
+
+[components.fast-driver.oracle.studio]
+system = "Fast Tendermint Driver"
+model = "quint-specs/fast-driver.qnt"
+invariants = [
+    "justified_reproposal_needs_2f1_in_the_named_round",
+    "l42_fires_on_whichever_arrives_second",
+    "a_decided_value_was_judged_valid",
+    "a_decision_carries_the_proposals_round",
+    "a_repropose_request_is_never_silent",
+    "valid_never_records_a_round_above_our_own",
+    "only_precommits_are_tallied",
+    "keeper_outputs_keep_their_reported_round",
+    "a_decision_is_never_revised",
+    "only_fresh_proposals_are_retained",
+]
+
+[[components.fast-driver.oracle.studio.adversaryDispositions]]
+row = "A proposer sends a re-proposal naming a pol_round whose 2f+1 quorum does not exist."
+disposition = "modeled"
+
+[components.fast-driver.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["Driverprocess"]
+observations = [
+    "reproposal_routed_as_unjustified",
+    "reproposal_routed_as_justified",
+]
+properties = ["justified_reproposal_needs_2f1_in_the_named_round"]
+
+[[components.fast-driver.oracle.studio.adversaryDispositions]]
+row = "A proposal arrives for a value id whose fresh original was never retained (dropped as invalid), leaving an n-f quorum with no resolvable value."
+disposition = "modeled"
+
+[components.fast-driver.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["Driverprocess"]
+observations = [
+    "invalid_proposal_not_retained",
+    "decision_quorum_waited_for_its_proposal",
+    "repropose_value_missing",
+]
+properties = [
+    "a_decided_value_was_judged_valid",
+    "only_fresh_proposals_are_retained",
+]
+
+[[components.fast-driver.oracle.studio.adversaryDispositions]]
+row = "Votes arrive before the proposal, so the keeper has already latched and will never re-report the threshold."
+disposition = "modeled"
+
+[components.fast-driver.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["Driverprocess"]
+observations = [
+    "decision_fired_on_the_proposal_edge",
+    "decision_fired_on_the_vote_edge",
+]
+properties = [
+    "l42_fires_on_whichever_arrives_second",
+    "a_decision_carries_the_proposals_round",
+]
+
+[[components.fast-driver.oracle.studio.adversaryDispositions]]
+row = "Timeout kinds the Fast protocol has no step for (Prevote) are injected as round inputs."
+disposition = "modeled"
+
+[components.fast-driver.oracle.studio.adversaryDispositions.groundedBy]
+actions = ["Driverprocess"]
+observations = [
+    "timeout_kind_without_a_step_ignored",
+    "prevote_discarded_by_the_keeper",
+]
+properties = ["valid_never_records_a_round_above_our_own"]
+
+[components.fast-driver.fingerprints]
+spec = ""
+oracle = "fnv1a64:f8275e0683f9233c"
+coverage = ""
+
+[components.fast-driver.fingerprints.code]
+
+[components.fast-driver.fingerprints.instrumented]
+
 [components.fast-round-state-machine]
 name = "Fast Tendermint Round State Machine"
 description = "The separate n>5f per-round algorithm (Unstarted → Propose → Precommit → Commit) with one voting step, a merged valid:(round, id) field, id-only re-proposals and the WaitForValid proposer wait, as a pure apply(state, info, input) → Transition."
@@ -5088,6 +5315,56 @@ coverage = "fnv1a64:761db555c68e3baa"
 subject = "obs:equivocation_missed_after_prune"
 outcome = "bug-reproduced"
 at = 1789129560
+
+[components.full-proposal-keeper]
+name = "Full Proposal Keeper"
+description = "Pairs consensus proposals with application-built values by value id across every round of a height, upgrading ValueOnly/ProposalOnly entries to Full as the second half arrives, reconciling validity, capping entries per round and reporting proposer equivocation."
+role = "central"
+rank = 0
+paths = ["crates/core-consensus/src/full_proposal.rs"]
+tests = [
+    "crates/core-consensus/tests/full_proposal.rs",
+    "crates/core-consensus/tests/per_round_bound.rs",
+]
+dependencies = ["core-types-domain"]
+operations = [
+    "FullProposalKeeper::new() — constructs an empty keeper",
+    "FullProposalKeeper::store_proposal(proposal, exempt) -> StoreProposalResult — mutates; stores or upgrades an entry, reports Equivocation or the per-round cap",
+    "FullProposalKeeper::store_value(proposed_value) — mutates; stores a value and upgrades every matching ProposalOnly entry at the height",
+    "FullProposalKeeper::would_append_distinct(...) -> bool — query; whether the proposal would add a new distinct entry",
+    "FullProposalKeeper::proposals_for_value(value) — query",
+    "FullProposalKeeper::full_proposal_at_round_and_value(...) — query",
+    "FullProposalKeeper::full_proposal_at_round_and_proposer(...) — query",
+    "FullProposalKeeper::get_value_by_id(id) — query; searches across every round at the height",
+    "FullProposalKeeper::clear() — mutates; drops entries at and below a height",
+]
+headlineProperties = [
+    "A proposal and a value are paired by value id alone; round and pol_round take no part in pairing.",
+    "At most MAX_PROPOSALS_PER_ROUND distinct entries are retained per (height, round) unless the caller declares an entry exempt.",
+    "Validity reconciliation is one-directional: Invalid -> Valid propagates, Valid -> Invalid is rejected.",
+    "Two proposals for the same (height, round) with the same value id but differing elsewhere keep only the first and still report Equivocation, so evidence is never lost.",
+    "Entry::Empty is never observable as stored state — it is only a transient placeholder during in-place upgrade.",
+]
+adversarySurface = [
+    "A proposer floods one (height, round) with distinct value ids to exhaust the per-round cap and crowd out the honest proposal.",
+    "A proposer sends the same value id twice differing only in pol_round.",
+    "A single incoming value completes several ProposalOnly entries across different rounds at once.",
+    "A value arrives claiming Invalid for an id already stored Valid.",
+]
+specHints = "crates/core-consensus/src/full_proposal.rs:10 MAX_PROPOSALS_PER_ROUND; :101 the keeper's own contract doc (pairing by id, cross-round matching, validity reconciliation, equivocation); :281 store_proposal; :368 store_value"
+cardRead = false
+connectionsRead = false
+spec = ""
+version = 0
+observationsConfirmed = false
+propertiesConfirmed = false
+confirmedObservations = []
+confirmedProperties = []
+retiredObservations = []
+retiredProperties = []
+wireConfirmed = false
+setupCompleted = false
+cardsDone = false
 
 [components.message-codec]
 name = "Message Codec"
@@ -9875,6 +10152,62 @@ coverage = ""
 "quint-specs/oracle-client/rust/src/live/value.rs" = "fnv1a64:7c5a5dd102552994"
 "quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
 "quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
+
+[components.vote-extensions]
+name = "Vote Extensions"
+description = "The per-height Disabled/Required extension policy enforced on every non-nil precommit, the scope that binds an extension to its height/round/value/validator so it cannot be replayed, and the extension set carried in extended commit certificates."
+role = "cross-cutting"
+rank = 0
+paths = [
+    "crates/core-types/src/vote_extension.rs",
+    "crates/core-consensus/src/handle/signature.rs",
+    "crates/core-consensus/src/handle/driver.rs",
+]
+tests = [
+    "crates/core-consensus/tests/vote_extension_policy.rs",
+    "crates/test/tests/unit/vote_extension.rs",
+    "crates/test/tests/unit/extended_commit.rs",
+    "crates/test/tests/it/vote_extensions.rs",
+]
+dependencies = [
+    "core-types-domain",
+    "signing",
+]
+operations = [
+    "VoteExtensionPolicy (Disabled | Required) — the per-height policy supplied by the application in the height parameters",
+    "VoteExtensionScope::new(height, round, value_id, validator) — constructs the signed preimage scope binding an extension to one precommit",
+    "VoteExtensions::new(extensions) — constructs the set carried in an extended commit",
+    "VoteExtensions::size_bytes() -> usize — query",
+    "verify_signature(..., vote_extension_policy) — verifies a signed vote and its extension against the policy",
+    "apply_driver_input(..., vote_extension_policy) — mutates; rejects a non-nil precommit that violates the policy with Error::VoteExtensionRequired",
+]
+headlineProperties = [
+    "Under Disabled, every non-nil precommit must omit its extension; under Required, every non-nil precommit must carry a valid one.",
+    "The policy applies only to non-nil precommits — nil precommits carry no extension under either policy.",
+    "An extension signature produced for one (height, round, value, validator) scope verifies against no other, so an extension blob cannot be replayed across heights, rounds, values, or validators.",
+    "Producer and verifier must agree on the canonical encoding of the scope.",
+]
+adversarySurface = [
+    "A validator attaches an extension while the height policy is Disabled.",
+    "A validator omits the extension while the policy is Required.",
+    "An extension harvested from one height/round/value/validator is replayed against another.",
+    "An oversized extension blob is attached to inflate an extended commit certificate.",
+    "A synced commit certificate carries extensions that do not match the policy of the height it is verified at.",
+]
+specHints = "crates/core-types/src/vote_extension.rs:9 the policy and its contract; :37 VoteExtensionScope and the replay argument; :77 VoteExtensions; crates/core-consensus/src/handle/driver.rs:479 the policy parameter and :500 Error::VoteExtensionRequired; crates/core-consensus/src/handle/signature.rs:70"
+cardRead = false
+connectionsRead = false
+spec = ""
+version = 0
+observationsConfirmed = false
+propertiesConfirmed = false
+confirmedObservations = []
+confirmedProperties = []
+retiredObservations = []
+retiredProperties = []
+wireConfirmed = false
+setupCompleted = false
+cardsDone = false
 
 [components.vote-keeper]
 name = "Vote Keeper"

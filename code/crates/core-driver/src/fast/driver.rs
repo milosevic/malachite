@@ -9,7 +9,8 @@ use malachitebft_core_state_machine::fast::output::Output as RoundOutput;
 use malachitebft_core_state_machine::fast::state::State as RoundState;
 use malachitebft_core_state_machine::fast::state_machine::{apply, Info};
 use malachitebft_core_types::{
-    Context, Proposal, Round, SignedVote, Timeout, TimeoutKind, Validity, Value,
+    Context, NilOrVal, Proposal, Round, SignedVote, Timeout, TimeoutKind, Validator,
+    ValidatorSet, Validity, Value, Vote, VoteType,
 };
 use malachitebft_core_votekeeper::fast::keeper::{FastVoteKeeper, Output as KeeperOutput};
 use malachitebft_core_votekeeper::fast::params::FastThresholdParams;
@@ -76,7 +77,7 @@ impl<Ctx: Context> Driver<Ctx> {
         proposer: Ctx::Address,
         threshold_params: FastThresholdParams,
     ) -> Self {
-        Self {
+        let driver = Self {
             ctx,
             address,
             proposer,
@@ -84,7 +85,55 @@ impl<Ctx: Context> Driver<Ctx> {
             validator_set,
             proposals: FreshProposals::new(),
             round_state: RoundState::new(height, Round::Nil),
+        };
+
+        if quint_oracle::enabled() {
+            driver.oracle_log_new();
         }
+
+        driver
+    }
+
+    /// Quint oracle: the model names validators by letter, with our own address
+    /// always `a` and the rest lettered by their position in the validator set.
+    /// An address outside the set is `z`, which the model's VOTERS domain holds
+    /// so the discard branch stays expressible.
+    fn oracle_addr(&self, address: &Ctx::Address) -> &'static str {
+        const LETTERS: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
+        if address == &self.address {
+            return LETTERS[0];
+        }
+        let me = (0..self.validator_set.count())
+            .find(|i| self.validator_set.get_by_index(*i).map(|v| v.address()) == Some(&self.address));
+        let idx = (0..self.validator_set.count())
+            .find(|i| self.validator_set.get_by_index(*i).map(|v| v.address()) == Some(address));
+        match (idx, me) {
+            // Rank among the validators that are not us, shifted past `a`.
+            (Some(i), Some(m)) => {
+                let rank = if i < m { i } else { i - 1 };
+                LETTERS.get(rank + 1).copied().unwrap_or("z")
+            }
+            (Some(i), None) => LETTERS.get(i).copied().unwrap_or("z"),
+            (None, _) => "z",
+        }
+    }
+
+    /// Quint oracle: report the constructed baseline. The whole payload the
+    /// model needs is one argument, so replay never searches at step 0.
+    fn oracle_log_new(&self) {
+        let proposer = self.oracle_addr(&self.proposer);
+        quint_oracle::Event::builder(quint_oracle::current_test(), "Drivernew")
+            .argument("proposer", proposer, Some("VALIDATORS"))
+            .assert(
+                alloc::vec::Vec::from([
+                    quint_oracle::PathSeg::ident("d"),
+                    quint_oracle::PathSeg::ident("rs"),
+                    quint_oracle::PathSeg::ident("round"),
+                ]),
+                self.round_state.round().as_i64(),
+            )
+            .scope("fast-driver")
+            .send();
     }
 
     /// The round we are at.
@@ -105,10 +154,158 @@ impl<Ctx: Context> Driver<Ctx> {
     /// Set the proposer for the round being entered.
     pub fn set_proposer(&mut self, proposer: Ctx::Address) {
         self.proposer = proposer;
+
+        if quint_oracle::enabled() {
+            let address = self.oracle_addr(&self.proposer);
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Driverset_proposer")
+                .argument("address", address, Some("VALIDATORS"))
+                .scope("fast-driver")
+                .send();
+        }
     }
 
     /// Apply one input and return everything the caller should act on.
     pub fn process(&mut self, input: Input<Ctx>) -> Vec<Output<Ctx>> {
+        // Quint oracle: describe the input the way the spec models it — the
+        // constructor by name plus the scalar fields it carries — before
+        // `input` is moved into the match below. Fields an input does not carry
+        // are pinned to values the model always holds, so replay never searches
+        // them blind.
+        let oracle_on = quint_oracle::enabled();
+        let (
+            oracle_tag,
+            oracle_round,
+            oracle_value,
+            oracle_pol,
+            oracle_validity,
+            oracle_voter,
+            oracle_vtype,
+            oracle_kind,
+        ) = if oracle_on {
+            match &input {
+                Input::NewRound(round) => (
+                    "NewRound",
+                    round.as_i64(),
+                    alloc::string::String::from("v"),
+                    -1,
+                    true,
+                    "a",
+                    "Precommit",
+                    "Propose",
+                ),
+                Input::ProposeValue(round, value) => (
+                    "ProposeValue",
+                    round.as_i64(),
+                    alloc::format!("{}", value.id()),
+                    -1,
+                    true,
+                    "a",
+                    "Precommit",
+                    "Propose",
+                ),
+                Input::Proposal(proposal, validity) => (
+                    "Proposal",
+                    proposal.round().as_i64(),
+                    alloc::format!("{}", proposal.value().id()),
+                    proposal.pol_round().as_i64(),
+                    validity.is_valid(),
+                    "a",
+                    "Precommit",
+                    "Propose",
+                ),
+                Input::Vote(vote) => (
+                    "Vote",
+                    vote.round().as_i64(),
+                    match vote.value() {
+                        NilOrVal::Nil => alloc::string::String::from("Nil"),
+                        NilOrVal::Val(id) => alloc::format!("{id}"),
+                    },
+                    -1,
+                    true,
+                    self.oracle_addr(vote.validator_address()),
+                    if vote.vote_type() == VoteType::Precommit {
+                        "Precommit"
+                    } else {
+                        "Prevote"
+                    },
+                    "Propose",
+                ),
+                Input::TimeoutElapsed(timeout) => (
+                    "TimeoutElapsed",
+                    timeout.round.as_i64(),
+                    alloc::string::String::from("v"),
+                    -1,
+                    true,
+                    "a",
+                    "Precommit",
+                    match timeout.kind {
+                        TimeoutKind::Propose => "Propose",
+                        TimeoutKind::Precommit => "Precommit",
+                        TimeoutKind::Prevote => "Prevote",
+                        TimeoutKind::Rebroadcast => "Rebroadcast",
+                        _ => "FinalizeHeight",
+                    },
+                ),
+                Input::WaitForValidExpired => (
+                    "WaitForValidExpired",
+                    self.round_state.round().as_i64(),
+                    alloc::string::String::from("v"),
+                    -1,
+                    true,
+                    "a",
+                    "Precommit",
+                    "Propose",
+                ),
+            }
+        } else {
+            (
+                "",
+                -1,
+                alloc::string::String::new(),
+                -1,
+                true,
+                "a",
+                "Precommit",
+                "Propose",
+            )
+        };
+
+        let outputs = self.process_inner(input);
+
+        if oracle_on {
+            quint_oracle::Event::builder(quint_oracle::current_test(), "Driverprocess")
+                .argument("inputTag", oracle_tag, Some("ALL_TAGS"))
+                .argument("iround", oracle_round, None)
+                .argument("ivalue", oracle_value.as_str(), Some("VOTE_VALUES"))
+                .argument("ipol", oracle_pol, None)
+                .argument("ivalidity", oracle_validity, None)
+                .argument("ivoter", oracle_voter, Some("VOTERS"))
+                .argument("ivtype", oracle_vtype, Some("VOTE_TYPES"))
+                .argument("ikind", oracle_kind, Some("KIND_NAMES"))
+                // Conformance facts: the round the driver is at, and how many
+                // outputs the call actually returned.
+                .assert(
+                    alloc::vec::Vec::from([
+                        quint_oracle::PathSeg::ident("d"),
+                        quint_oracle::PathSeg::ident("rs"),
+                        quint_oracle::PathSeg::ident("round"),
+                    ]),
+                    self.round_state.round().as_i64(),
+                )
+                .assert(
+                    alloc::vec::Vec::from([quint_oracle::PathSeg::ident("lastOutputCount")]),
+                    outputs.len() as i64,
+                )
+                .scope("fast-driver")
+                .send();
+        }
+
+        outputs
+    }
+
+    /// The routing itself, split out so `process` can report the call to the
+    /// Quint oracle without the match arms having to know about it.
+    fn process_inner(&mut self, input: Input<Ctx>) -> Vec<Output<Ctx>> {
         match input {
             Input::NewRound(round) => self.apply_round(RoundInput::NewRound(round), round),
 

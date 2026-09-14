@@ -45,6 +45,9 @@ independent reviewer, not by Studio or by the tests.
 | F-32b | An unpairable decision quorum was lost forever, and my test pinned it as intended | reviewer (round 5) | high | `1d51e828` | next commit | **fixed** |
 | F-32c | Proposals the application rejected were retained and could supply a decision | reviewer (round 5) | medium | `1d51e828` | next commit | **fixed** |
 | F-32d | One `proposer` field answers for every input round | reviewer (round 5) | medium | `1d51e828` | — | **open** |
+| F-33a | Oracle address→letter mapping aliases two validators onto `a` when the node is outside its own validator set | me (gate review) | low | `ac4916df` | — | **open** — instrumentation-only, unreachable in current tests |
+| F-33b | Five decision-path observations were unreachable in the fast-driver validation battery | studio (fast-driver, instrumentation) | low | `ac4916df` | `ac4916df`+ | **fixed by Studio** — two search-guidance arms added |
+| F-33c | `keeper_outputs_keep_their_reported_round` submitted without its promised mutation check | studio (fast-driver, instrumentation) | medium | `ac4916df` | — | **open** — worker committed to run it post-gate and drop the property if vacuous |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -958,3 +961,59 @@ as F-01, and it deserves the same verdict.
   requirements are stated intent, not evidence.
 - **`round-state-machine`, `vote-keeper`, `consensus-orchestrator` slipped from `ready`
   back to `oracle`** during the 09-10 session. Cause unknown.
+
+### F-33a — DEFINITE/Low. The oracle's letter mapping can alias two validators
+
+Studio's `fast-driver` instrumentation names validators by letter for the model,
+reserving `a` for the node itself. The fallback arm
+
+```rust
+(Some(i), None) => LETTERS.get(i).copied().unwrap_or("z"),
+```
+
+runs when the node's own address is *not* in the validator set. In that case the
+validator at index 0 is also lettered `a`, colliding with the node's own letter
+from the early return above it. Two distinct addresses then look like one
+validator to the model, which would make a vote from validator 0 indistinguishable
+from a self-vote.
+
+Unreachable today: `fast_driver.rs` builds six validators and passes `me =
+addrs[0]`, so the node is always in its own set and the `(Some(i), None)` arm is
+dead. The correct fix is to letter from `b` in that arm, or to treat a node
+outside its own validator set as `z` like any other non-validator.
+
+Instrumentation-only — the whole block sits behind `quint_oracle::enabled()` and
+cannot affect production behaviour. Recorded rather than fixed to keep
+Studio-managed instrumentation Studio-owned; it belongs in the next `wire`
+restart.
+
+### F-33b — Studio's own battery caught five unreachable observations
+
+The `fast-driver` validation battery reported five observations on the decision
+path that no sampled run reached: `decision_fired_on_the_proposal_edge`,
+`decision_fired_on_the_vote_edge`, `decision_quorum_waited_for_its_proposal`,
+`repropose_resolved_to_a_full_proposal`, and `l42_skipped_because_already_decided`.
+
+The worker attributed this to the search failing to assemble a four-fifths quorum
+plus a matching proposal by chance, not to the observations being unsatisfiable,
+and fixed it by adding two search-guidance arms. Recorded because an unreachable
+observation is exactly the shape of a vacuous check — the same anti-vacuity
+discipline as [F-26] — and because the fix was Studio's, not mine.
+
+### F-33c — A property was submitted with its falsifiability check outstanding
+
+The instrumentation report states, verbatim: "The promised property
+mutation-check could not run before submission — `run_quint_check` is refused at
+the modeling stage. I will run it now that the check tools are available and
+report the results."
+
+The property at issue is `keeper_outputs_keep_their_reported_round`, which the
+worker itself pre-committed to drop: "if the mutation check shows it cannot fail
+independently of the L27 property, I will drop it rather than submit a vacuous
+invariant and say so."
+
+Approved the `instrumentation_result` gate anyway — the gate reviews the
+repository edit, which is additive, builds clean, and leaves the 8 driver tests
+passing; property falsifiability is a separate claim that the worker can still
+settle. Open until the worker reports the mutation result. If it does not, I run
+the check myself before this component is called ready.
