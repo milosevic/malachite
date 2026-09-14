@@ -47,7 +47,7 @@ independent reviewer, not by Studio or by the tests.
 | F-32d | One `proposer` field answers for every input round | reviewer (round 5) | medium | `1d51e828` | next commit | **fixed** — proposer folded into `Input::NewRound` |
 | F-33a | Oracle address→letter mapping aliases two validators onto `a` when the node is outside its own validator set | me (gate review) | low | `ac4916df` | — | **open** — instrumentation-only, unreachable in current tests |
 | F-33b | Five decision-path observations were unreachable in the fast-driver validation battery | studio (fast-driver, instrumentation) | low | `ac4916df` | `ac4916df`+ | **fixed by Studio** — two search-guidance arms added |
-| F-33c | `keeper_outputs_keep_their_reported_round` submitted without its promised mutation check | studio (fast-driver, instrumentation) | medium | `ac4916df` | — | **open** — worker committed to run it post-gate and drop the property if vacuous |
+| F-33c | `keeper_outputs_keep_their_reported_round` is a tautology — it compares a value with itself | me (ran the check the worker owed) | medium | `ac4916df` | — | **confirmed vacuous; must be dropped** |
 | F-34a | Studio's two generated tests were vacuity-prone: every assertion negative | me (mutation check) | medium | `c796d359` | `c796d359` | **fixed** — controls added |
 | F-34b | Equivocating vote untested at the driver boundary | studio (fast-driver, coverage) | medium | `ac4916df` | `c796d359` | **fixed** — test adopted |
 | F-34c | Vote from a non-validator untested at the driver boundary | studio (fast-driver, coverage) | medium | `ac4916df` | `c796d359` | **fixed** — test adopted |
@@ -1132,4 +1132,47 @@ in every test that had deliberately arranged not to be. It failed to compile for
 unrelated reason, which is the only reason I looked. The redo substitutes per test,
 reading each one's `driver_with` argument. A mechanical rewrite across tests is exactly
 where a semantic change hides behind a passing suite.
+
+### F-33c — resolved: the property cannot fail, and the reason is worse than suspected
+
+Studio's worker submitted `keeper_outputs_keep_their_reported_round` with its
+falsifiability check outstanding, pre-committing to "drop it rather than submit a
+vacuous invariant" if the check showed it could not fail independently of the L27
+property. The worker never reported back; the component reached `ready` with the
+property still in the list. I ran the check.
+
+It is worse than the worker's own hypothesis. The property is not merely entangled
+with another — it is a **tautology**, and no mutation of the Rust could ever falsify
+it, because it never observes the Rust at all.
+
+`keeper_outputs_keep_their_reported_round` is `not(keeperRoundDrifted)`. That ghost has
+exactly one producer, `quint-specs/fast-driver.qnt:622`, fed by one definition at
+line 610:
+
+```
+val drifted = r.round != roundOfKOut(o)
+```
+
+`r` is `routeKOut(acc.d, o)`, and `routeKOut` sets `round` by projecting the same field
+of the same `o` that `roundOfKOut` projects:
+
+| Keeper output | `routeKOut(...).round` (line 582-599) | `roundOfKOut(o)` (line 572-577) |
+| --- | --- | --- |
+| `KVoteQuorum(q)` | `q.round` | `q.round` |
+| `KQuorumAny(r)` | `r` | `r` |
+| `KDecisionQuorum(q)` | `q.round` (both branches) | `q.round` |
+
+So `drifted` is identically `false` in every reachable state, `"keeper_round_drifted"`
+never enters `bad`, the latch is never set, and the invariant holds by construction.
+It compares the spec against itself.
+
+**The property must be dropped**, exactly as the worker pre-committed. It is carried
+into the re-sync below rather than edited in place, since the spec is Studio-managed.
+
+**The lesson is about where to look.** A mutation check on the *Rust* would have
+reported "property never fails" and invited the conclusion that the code is simply
+correct. Reading the spec showed the property was structurally incapable of failing.
+For a model-level invariant, the falsifiability question has to be asked of the model,
+not of the implementation — which is the same lesson as [F-34a], one level up: there
+the generated *test* could not fail; here the generated *property* cannot.
 
