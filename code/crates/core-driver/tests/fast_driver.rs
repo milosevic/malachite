@@ -268,3 +268,100 @@ fn timeouts_route_by_kind() {
     }));
     assert!(ignored.is_empty(), "this protocol has no prevote step");
 }
+
+// ------------------------------------------------------ equivocation, at the driver
+
+/// A validator that votes twice for different values in one round must have the second
+/// vote recorded as evidence, never tallied. The driver is the layer where a tallied
+/// equivocation would become a quorum input and, through L42, a decision — so the claim
+/// worth pinning here is that no round input escapes.
+///
+/// Four honest validators vote for 7 and a fifth votes for 9; the fifth then equivocates
+/// toward 7. Counting that second vote would make five of six — `n-f` — and decide.
+///
+/// reproduces obs:equivocating_vote_not_tallied — asserts the keeper's equivocation guard
+/// holds at the driver boundary.
+#[test]
+fn an_equivocating_vote_cannot_manufacture_a_decision() {
+    let (a, mut d) = driver_with(false);
+    d.process(Input::NewRound(Round::new(0)));
+
+    // The value is proposed and retained, so only the votes stand between us and L42.
+    d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Valid));
+
+    // Four of six for 7: below n-f (5).
+    for i in 0..4 {
+        d.process(Input::Vote(vote(0, 7, a[i])));
+    }
+    assert!(d.decision().is_none(), "four votes are not n-f");
+
+    // The fifth validator votes for a different value, then equivocates toward 7.
+    d.process(Input::Vote(vote(0, 9, a[4])));
+    let out = d.process(Input::Vote(vote(0, 7, a[4])));
+
+    assert!(
+        !out.iter().any(|o| matches!(o, Output::Decision(..))),
+        "the equivocating vote must not produce a decision, got {out:?}"
+    );
+    assert!(
+        d.decision().is_none(),
+        "an equivocating vote must not manufacture the n-f quorum that decides"
+    );
+
+    // Control. Every assertion above is negative, so all of them would hold just as well
+    // on a driver that can never decide at all — verified by mutation: replacing the
+    // Decision arm of `resolve` with a discard leaves them green. A genuine fifth voter
+    // must still decide, and that is what makes the test falsifiable.
+    let out = d.process(Input::Vote(vote(0, 7, a[5])));
+    assert!(
+        out.iter().any(|o| matches!(o, Output::Decision(..))),
+        "a legitimate fifth vote must still decide, got {out:?}"
+    );
+    assert_eq!(d.decision().map(|(_, v)| v.clone()), Some(Value::new(7)));
+}
+
+/// A vote attributed to an address outside the validator set must be discarded before it
+/// is counted — gossip delivers whatever peers send, and signature verification happens
+/// elsewhere, so such a vote can arrive at any time. The driver is the layer where a
+/// wrongly counted vote would turn into a round input and, through L42, a decision.
+///
+/// Four honest validators vote for 7; a stranger then votes for 7 too. Counting it would
+/// make five — `n-f` — and decide.
+///
+/// reproduces obs:vote_from_a_non_validator_discarded — asserts the keeper's membership
+/// guard holds at the driver boundary.
+#[test]
+fn a_vote_from_outside_the_validator_set_cannot_manufacture_a_decision() {
+    let (a, mut d) = driver_with(false);
+    d.process(Input::NewRound(Round::new(0)));
+
+    // The value is proposed and retained, so only the votes stand between us and L42.
+    d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Valid));
+
+    // Four of six for 7: below n-f (5).
+    for i in 0..4 {
+        d.process(Input::Vote(vote(0, 7, a[i])));
+    }
+    assert!(d.decision().is_none(), "four votes are not n-f");
+
+    // A fifth vote for the same value, from an address that is not in the set.
+    let stranger = Address::from_public_key(&PrivateKey::from([99u8; 32]).public_key());
+    let out = d.process(Input::Vote(vote(0, 7, stranger)));
+
+    assert!(
+        !out.iter().any(|o| matches!(o, Output::Decision(..))),
+        "a non-validator's vote must not produce a decision, got {out:?}"
+    );
+    assert!(
+        d.decision().is_none(),
+        "a vote from outside the validator set must not manufacture the n-f quorum"
+    );
+
+    // Control, for the same reason and verified the same way as above.
+    let out = d.process(Input::Vote(vote(0, 7, a[4])));
+    assert!(
+        out.iter().any(|o| matches!(o, Output::Decision(..))),
+        "a legitimate fifth vote must still decide, got {out:?}"
+    );
+    assert_eq!(d.decision().map(|(_, v)| v.clone()), Some(Value::new(7)));
+}
