@@ -1158,8 +1158,13 @@ mod tests {
     use super::*;
 
     /// Serialize the default consensus config, drop the `protocol` line, and parse
-    /// what is left. That is the shape of every configuration file written before
-    /// the field existed, and it must still select classic Tendermint.
+    /// what is left: a document carrying every other field but not this one, which
+    /// must still select classic Tendermint.
+    ///
+    /// This round-trips the *current* struct minus one line, so it pins the
+    /// `#[serde(default)]` and the `#[default]` variant — not the shape of any real
+    /// historical file. The guard for those is `parse_default_config_file` in the
+    /// test-app crate, which parses the checked-in reference config.
     #[test]
     fn consensus_config_written_before_the_protocol_field_still_runs_classic() {
         let full = toml::to_string(&ConsensusConfig::default()).unwrap();
