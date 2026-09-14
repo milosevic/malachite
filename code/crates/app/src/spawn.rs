@@ -41,10 +41,15 @@ use crate::types::ValuePayload;
 /// actor**: there is no reason to open a WAL or a network listener for a node that cannot
 /// start. [`spawn_consensus_actor`] calls it too, for embedders that bypass the builder.
 ///
-/// TODO: the protocol is a per-node field for a property that is network-wide and fixed at
-/// genesis — nothing here cross-validates it against the rest of the validator set. That is
-/// unreachable while `fast` refuses to boot; whatever wires the fast driver into the
-/// consensus actor must remove that refusal and add the check in the same change.
+/// TODO: two things must land in the same change that removes this refusal.
+///
+/// 1. The protocol is a per-node field for a property that is network-wide and fixed at
+///    genesis — nothing here cross-validates it against the rest of the validator set.
+/// 2. Fast proposals must be routed through the same membership check the classic path
+///    uses (`core-consensus/src/handle/proposal.rs`, `validator_set.get_by_address`)
+///    before they reach the driver. The fast driver's `FreshProposals` store, like the
+///    classic `ProposalKeeper`, is bounded only because something upstream rejects
+///    non-members first; handing it raw gossip would make it grow without limit.
 pub fn check_consensus_protocol(cfg: &ConsensusConfig) -> Result<()> {
     match cfg.protocol {
         ConsensusProtocol::Classic => Ok(()),

@@ -1252,3 +1252,40 @@ driver is wired into the consensus actor, the refusal disappears and this become
 failure mode. **A TODO now sits on `check_consensus_protocol`**, the function that must be
 changed to wire it up, so the two cannot be separated.
 
+## `FreshProposals` growth — resolved: the same class as classic, and the same dependency
+
+Left open since F-32 ("bounded only by distinct values proposed in a height, and `keep`
+runs before any proposer check, so any peer reaching the driver can grow it"). Checked it
+against the classic path before fixing anything, and the conclusion is that there is
+nothing to fix in the driver.
+
+**Proposer validation is not the driver's job in either protocol.** The classic driver's
+`apply_proposal` (`core-driver/src/driver.rs:890-908`) checks the *height* and nothing
+else; membership is checked upstream, in the consensus actor, at
+`core-consensus/src/handle/proposal.rs:191` (`validator_set.get_by_address(...)`). The
+fast driver sits at the same layer and inherits the same contract.
+
+**The stores are the same order of growth**, not different ones:
+
+| | Keyed by | Cleared | Bounded by |
+| --- | --- | --- | --- |
+| classic `ProposalKeeper` | `BTreeMap<Round, PerRound>` | per height | rounds × proposals per round |
+| fast `FreshProposals` | identifier | per height | distinct values in the height |
+
+So adding a proposer check inside the fast driver would not close a hole the classic path
+leaves open; it would diverge from the architecture for no gain, and after F-32d the fast
+driver only knows the *current* round's proposer anyway, so it could not evaluate a
+proposal naming an earlier round.
+
+**What this really is: a dependency, not a defect.** Both stores are bounded only because
+something upstream rejects non-members first. For classic that something exists. For fast
+it does not yet — nothing wires the fast driver into the consensus actor, which is the
+same gap that makes `consensus.protocol = "fast"` refuse to boot. **Recorded against the
+same TODO on `check_consensus_protocol`**, which is the function that has to change to
+wire it up: whatever does that must route fast proposals through the membership check the
+classic path already uses, and must not hand the driver raw gossip.
+
+Downgraded from an open finding to a documented precondition. [F-01] stays open on its own
+merits — that one is a genuine unbounded *evidence* store on the classic path, with no
+upstream gate behind it.
+
