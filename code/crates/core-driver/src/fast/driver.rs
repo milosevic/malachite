@@ -317,6 +317,18 @@ impl<Ctx: Context> Driver<Ctx> {
                 // it from `round_state.round` permanently. So it is restored on refusal.
                 let previous = core::mem::replace(&mut self.proposer, proposer);
                 let (outputs, entered) = self.apply_round_checked(RoundInput::NewRound(round), round);
+                // `entered` is `transition.valid`, which is a proxy: it means "the input
+                // applied", not "the round was entered". The two coincide for `NewRound`
+                // because both accepting arms call `start_round`, which always enters and
+                // always reports valid, while every other arm passes the state through
+                // untouched. That is a property of the match arms, so it is pinned here
+                // rather than left to be rediscovered — `valid` is NOT a general
+                // "nothing changed" flag (`VoteQuorumForValue` mutates and then reports
+                // invalid).
+                debug_assert!(
+                    !entered || self.round_state.round() == round,
+                    "a valid NewRound must have entered the round it named"
+                );
                 if !entered {
                     self.proposer = previous;
                 }

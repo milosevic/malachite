@@ -59,6 +59,11 @@ independent reviewer, not by Studio or by the tests.
 | F-36a | My F-32d fix was incomplete: a **refused** `NewRound` still overwrote the proposer, so both original failure modes stayed reachable | reviewer (round 7) | high | `59038473` | next commit | **fixed** |
 | F-36b | `awaiting_valid` is not round-scoped — it survives into a round we do not propose, refuting my inheritance argument | reviewer (round 7) | medium | `59038473` | next commit | **fixed** |
 | F-36c | Doc comment asserting the proposer "can never describe a round other than the one we last entered" was false | reviewer (round 7) | low | `59038473` | next commit | **fixed** |
+| F-37a | A `2f+1` quorum arriving before we reach its round is refused and latched, never re-offered on entry | reviewer (round 8) | medium | pre-existing | — | **open** — fix designed, next change |
+| F-37b | Same cause, L47: a proposer's `WaitForValid` cannot be ended by a quorum that arrived early | reviewer (round 8) | medium | pre-existing | — | **open** |
+| F-37c | `QuorumAny` had no `decision.is_none()` guard — a decided node kept arming precommit timeouts | reviewer (round 8) | low | pre-existing | next commit | **fixed** |
+| F-37d | `NewRound(Round::Nil)` was accepted; the driver asked for a value and scheduled a timeout for round −1 | reviewer (round 8) | low | pre-existing | next commit | **fixed** |
+| F-37e | `transition.valid` is a sound but implicit proxy for "entered the round"; nothing pinned the coupling | reviewer (round 8) | low | `b7ab123b` | next commit | **fixed** — `debug_assert` |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -1366,4 +1371,76 @@ and reached a conclusion that was **wrong in a way the analysis itself could not
 reasoned about which *state machine* arms consult the proposer, and never asked what the
 *driver* does when the state machine says no. A reviewer with executable probes found in
 one pass what a table could not.
+
+## F-37 — Eighth review: F-36 confirmed closed, and the audit found five more
+
+- **Found against:** `b7ab123b` · **Source:** independent reviewer, eighth round, eight
+  fresh probes
+
+F-36a, F-36b and F-36c are **confirmed closed** — the original probes now pass unchanged,
+and six new probes (stale lower rounds, full WAL replay of a round's prefix onto a later
+round, over-correction, stale `WaitForValidExpired`, post-decision inputs, undefined
+rounds) found nothing wrong with the fixes.
+
+The reviewer also answered the two questions I could not:
+
+- **`transition.valid` is a reliable proxy for "entered the round" — but only here.**
+  Exactly two arms bind `Input::NewRound`, both call `start_round`, which always enters and
+  always reports valid; every other arm passes the state through untouched. But `valid` is
+  **not** a general "nothing changed" flag: `VoteQuorumForValue` mutates via `set_valid`
+  and *then* returns `Transition::invalid`. My use is correct today and rests on a property
+  of the match arms that nothing tested. **F-37e: pinned with a `debug_assert`.**
+- **Three driver writes precede a state-machine call, and only one needed undoing.**
+  `self.proposer` (now restored), `self.proposals.keep` (correct as is — L42 pairs a
+  proposal with a quorum from any round, so retention must not depend on the round input
+  being accepted; that is the F-32b fix), and `self.vote_keeper.apply_vote`, whose tallies
+  deliberately survive. **That last one is where F-37a and F-37b come from.**
+
+### F-37a / F-37b — DEFINITE/Medium, pre-existing. A quorum that arrives early is lost
+`VoteQuorumForValue(r, v)` with `r > state.round` is refused by the state machine —
+deliberately, per the anti-lock argument that a quorum for a far-future round would
+otherwise set `valid` there and make the node vote nil in every round up to it. But the
+**keeper has already latched** `reached[r].vote_quorum`, and nothing re-offers it when we
+later enter round `r`. The paper's `upon` re-evaluates continuously; this fires once, on
+arrival, and drops it.
+
+Reproduced with the same four inputs in two orders:
+
+| Delivery order | Result |
+| --- | --- |
+| three round-1 votes for 7 while at round 0, enter round 1, fresh proposal for 9 | **we vote for 9** |
+| enter round 1, the same three votes, the same proposal | **we vote nil** |
+
+F-37b is the liveness half: with the round-1 quorum already latched, entering round 2 as
+proposer emits `WaitForValid` and no further round-1 vote can end it, so the proposer burns
+the full timeout — the exact failure the code comment says the design avoids.
+
+The reviewer could not construct a **safety** violation and classified both as
+fidelity/liveness: the paper tolerates the interleaving where the proposal rule fires
+before L36, so voting 9 is permitted there too.
+
+**This is the same latch-once shape already fixed for decisions** (F-32b: `decision_quorum`
+never re-emits, so `apply_proposal` re-checks it via `decision_quorum_round`). The
+symmetric fix is a keeper accessor for latched `2f+1` quorums at or below the round being
+entered, re-offered from the `NewRound` arm.
+
+**Deliberately not bundled into this commit.** There is a real design question inside it —
+with `n > 5f` two `2f+1` quorums need not intersect, so one round can hold a latched quorum
+for **two different values**, and "which one is re-offered" is a choice the on-arrival path
+never had to make (first arrival won). Rushing that is how F-36 happened: a careful
+analysis that was wrong in a way it could not see. It gets its own change and its own
+review.
+
+### F-37c, F-37d — DEFINITE/Low, pre-existing, both fixed
+`QuorumAny` had no `decision.is_none()` guard, so a decided node kept arming precommit
+timeouts — harmless, since the timeout arm then refuses, but it contradicts the intent
+written on the `NewRound` arm, which added exactly that guard so a decided node "schedules
+no timeouts".
+
+`NewRound(Round::Nil)` was accepted from `Unstarted` (`Nil <= Nil`) and produced
+`GetValueAndScheduleTimeout(h, Nil, …)` — a value request and a propose timeout for round
+−1. The keeper already refuses an undefined round explicitly; the state machine did not.
+Both `NewRound` guards now require `round.is_defined()`.
+
+Both are pinned by tests that fail with the fixes reverted.
 

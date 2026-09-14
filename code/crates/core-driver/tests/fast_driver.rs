@@ -464,3 +464,55 @@ fn a_refused_new_round_cannot_make_us_propose_someone_elses_round() {
         );
     }
 }
+
+/// A decided node arms no timeouts. The `NewRound` and precommit-timeout arms already
+/// refused to act after a decision; `QuorumAny` did not, so votes still arriving for a
+/// later round kept scheduling precommit timeouts on a node that was finished.
+#[test]
+fn a_decided_node_arms_no_further_precommit_timeouts() {
+    let (a, mut d) = driver_with(false);
+    d.process(Input::NewRound(Round::new(0), a[1]));
+    d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Valid));
+    for i in 0..5 {
+        d.process(Input::Vote(vote(0, 7, a[i])));
+    }
+    assert_eq!(d.decision().map(|(_, v)| v.clone()), Some(Value::new(7)), "must decide");
+
+    // n - f votes for a different value in a later round. They can no longer change
+    // anything, so they must not arm anything either.
+    for i in 0..5 {
+        let out = d.process(Input::Vote(vote(1, 9, a[i])));
+        assert!(
+            !out.iter().any(|o| matches!(
+                o,
+                Output::ScheduleTimeout(t) if t.kind == TimeoutKind::Precommit
+            )),
+            "a decided node must schedule no precommit timeout, got {out:?}"
+        );
+    }
+    assert_eq!(
+        d.decision().map(|(_, v)| v.clone()),
+        Some(Value::new(7)),
+        "and the decision must not be revised"
+    );
+}
+
+/// `Round::Nil` is not a round. The vote keeper already refuses votes at an undefined
+/// round ("Algorithm 1 defines no vote at an undefined round"); the state machine accepted
+/// `NewRound(Nil)` from `Unstarted` because `Nil <= Nil`, and the driver went on to ask the
+/// application for a value and schedule a propose timeout for round -1.
+#[test]
+fn an_undefined_round_cannot_be_entered() {
+    let (a, mut d) = driver_with(true);
+
+    let out = d.process(Input::NewRound(Round::Nil, a[0]));
+    assert!(out.is_empty(), "an undefined round is not a round, got {out:?}");
+
+    // And the real first round still works afterwards.
+    let out = d.process(Input::NewRound(Round::new(0), a[0]));
+    assert!(
+        out.iter()
+            .any(|o| matches!(o, Output::GetValueAndScheduleTimeout(..))),
+        "round 0 must still start normally, got {out:?}"
+    );
+}

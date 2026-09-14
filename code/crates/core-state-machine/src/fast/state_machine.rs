@@ -239,7 +239,7 @@ where
         // Without it, a NewRound for the current round resets Precommit back to Propose
         // and the node can cast a SECOND vote in that round — equivocating against itself.
         (Step::Unstarted, Input::NewRound(round))
-            if state.round <= round && state.decision.is_none() =>
+            if round.is_defined() && state.round <= round && state.decision.is_none() =>
         {
             start_round(state, info, round)
         }
@@ -247,7 +247,9 @@ where
         // decided node keeps entering rounds: `with_step` correctly refuses to leave
         // Commit, but `update_round` still advances and `start_round` runs to completion,
         // so the node schedules timeouts and emits proposals after deciding.
-        (_, Input::NewRound(round)) if state.round < round && state.decision.is_none() => {
+        (_, Input::NewRound(round))
+            if round.is_defined() && state.round < round && state.decision.is_none() =>
+        {
             start_round(state, info, round)
         }
 
@@ -341,7 +343,7 @@ where
 
         // L39-L40: n - f votes for any value at a round at or above ours arms the
         // precommit timeout. This is the only path that advances a round.
-        (_, Input::QuorumAny(round)) if round >= state.round => {
+        (_, Input::QuorumAny(round)) if round >= state.round && state.decision.is_none() => {
             // L39 latches per r ("for the first time with r >= round_p"), and the timeout
             // scheduled is for r, which may be ABOVE the round we are at. Using the
             // per-round bit would let a quorum for round 0 consume the only slot and leave
