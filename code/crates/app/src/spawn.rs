@@ -90,7 +90,7 @@ where
 
     let consensus_params = ConsensusParams {
         address,
-        threshold_params: Default::default(),
+        protocol: Default::default(),
         value_payload,
         enabled: cfg.enabled,
     };

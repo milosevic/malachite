@@ -72,7 +72,7 @@ where
             height,
             validator_set,
             params.address.clone(),
-            params.threshold_params,
+            params.threshold_params(),
         );
 
         Self {
@@ -345,7 +345,7 @@ where
             info!(
                 "Voting power required: {}",
                 self.params
-                    .threshold_params
+                    .threshold_params()
                     .quorum
                     .min_expected(self.driver.validator_set().total_voting_power())
             );

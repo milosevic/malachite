@@ -34,7 +34,7 @@ where
             co,
             certificate.clone(),
             state.driver.validator_set().clone(),
-            state.params.threshold_params,
+            state.params.threshold_params(),
         )
         .await?
         .is_ok(),

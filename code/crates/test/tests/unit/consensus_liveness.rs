@@ -82,7 +82,7 @@ async fn consensus_actor_terminates_on_start_height_error() {
         ctx,
         ConsensusParams {
             address: Address::new([0; 20]),
-            threshold_params: ThresholdParams::default(),
+            protocol: Default::default(),
             value_payload: ValuePayload::ProposalAndParts,
             enabled: true,
         },

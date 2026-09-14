@@ -90,7 +90,7 @@ fn make_state(
         vs,
         Params {
             address: my_addr,
-            threshold_params: Default::default(),
+            protocol: Default::default(),
             value_payload: payload,
             enabled: true,
         },

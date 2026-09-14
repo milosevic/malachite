@@ -24,7 +24,7 @@ fn make_state(validators: &[Validator], my_addr: Address) -> State<TestContext> 
         vs.clone(),
         Params {
             address: my_addr,
-            threshold_params: Default::default(),
+            protocol: Default::default(),
             value_payload: ValuePayload::ProposalOnly,
             enabled: true,
         },

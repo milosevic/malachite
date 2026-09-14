@@ -61,7 +61,7 @@ where
         co,
         certificate.clone(),
         validator_set.clone(),
-        state.params.threshold_params,
+        state.params.threshold_params(),
     )
     .await?;
 
@@ -187,7 +187,7 @@ where
         co,
         certificate.clone(),
         validator_set.clone(),
-        state.params.threshold_params,
+        state.params.threshold_params(),
     )
     .await?;
 

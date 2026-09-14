@@ -161,7 +161,7 @@ where
         co,
         certificate.clone(),
         validator_set.clone(),
-        state.params.threshold_params,
+        state.params.threshold_params(),
         state.vote_extension_policy,
     )
     .await?
