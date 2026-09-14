@@ -24,7 +24,7 @@ use malachitebft_sync as sync;
 
 use crate::config::{ConsensusConfig, ValueSyncConfig};
 use crate::metrics::{Metrics, SharedRegistry};
-use crate::types::core::Context;
+use crate::types::core::{ConsensusProtocol, Context};
 use crate::types::ValuePayload;
 
 /// Spawn the [`Node`] supervisor.
@@ -88,11 +88,25 @@ where
         config::ValuePayload::ProposalAndParts => ValuePayload::ProposalAndParts,
     };
 
-    // Classic Tendermint. Nothing operator-facing can select the fast protocol yet:
-    // `crates/config` has no dependency on core-types and its `serde` feature is not
-    // enabled in the workspace, so a TOML field for it cannot exist until both are added.
-    // Recorded in the ledger rather than half-wired here.
-    let consensus_params = ConsensusParams::classic(address, value_payload, cfg.enabled);
+    // Honour the operator's protocol selection. `ConsensusParams::classic` is still the
+    // only constructor, because the consensus actor drives the classic round state machine
+    // and vote keeper; the fast driver exists (`core-driver/src/fast/`) but is not wired
+    // into this actor yet. So `fast` is a configuration the node understands and refuses,
+    // rather than one it silently downgrades to classic — a node that quietly ran the
+    // wrong protocol would disagree with its peers at the first quorum, and the operator
+    // would see a stalled network rather than a configuration error.
+    let consensus_params = match cfg.protocol {
+        ConsensusProtocol::Classic => {
+            ConsensusParams::classic(address, value_payload, cfg.enabled)
+        }
+        ConsensusProtocol::Fast => {
+            return Err(eyre!(
+                "consensus.protocol = \"fast\" is not yet supported by this node: the Fast \
+                 Tendermint driver is implemented but not wired into the consensus actor. \
+                 Set consensus.protocol = \"classic\" (the default) to start."
+            ))
+        }
+    };
 
     Consensus::spawn(
         ctx,

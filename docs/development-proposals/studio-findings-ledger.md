@@ -44,10 +44,14 @@ independent reviewer, not by Studio or by the tests.
 | F-32a | An unbuildable re-proposal stalled the proposer — no proposal, no timeout, no wait | reviewer (round 5) | high | `1d51e828` | next commit | **fixed** (interim; needs the id-carrying proposal type) |
 | F-32b | An unpairable decision quorum was lost forever, and my test pinned it as intended | reviewer (round 5) | high | `1d51e828` | next commit | **fixed** |
 | F-32c | Proposals the application rejected were retained and could supply a decision | reviewer (round 5) | medium | `1d51e828` | next commit | **fixed** |
-| F-32d | One `proposer` field answers for every input round | reviewer (round 5) | medium | `1d51e828` | — | **open** |
+| F-32d | One `proposer` field answers for every input round | reviewer (round 5) | medium | `1d51e828` | next commit | **fixed** — proposer folded into `Input::NewRound` |
 | F-33a | Oracle address→letter mapping aliases two validators onto `a` when the node is outside its own validator set | me (gate review) | low | `ac4916df` | — | **open** — instrumentation-only, unreachable in current tests |
 | F-33b | Five decision-path observations were unreachable in the fast-driver validation battery | studio (fast-driver, instrumentation) | low | `ac4916df` | `ac4916df`+ | **fixed by Studio** — two search-guidance arms added |
 | F-33c | `keeper_outputs_keep_their_reported_round` submitted without its promised mutation check | studio (fast-driver, instrumentation) | medium | `ac4916df` | — | **open** — worker committed to run it post-gate and drop the property if vacuous |
+| F-34a | Studio's two generated tests were vacuity-prone: every assertion negative | me (mutation check) | medium | `c796d359` | `c796d359` | **fixed** — controls added |
+| F-34b | Equivocating vote untested at the driver boundary | studio (fast-driver, coverage) | medium | `ac4916df` | `c796d359` | **fixed** — test adopted |
+| F-34c | Vote from a non-validator untested at the driver boundary | studio (fast-driver, coverage) | medium | `ac4916df` | `c796d359` | **fixed** — test adopted |
+| F-34d | `get_component_insights` cannot return coverage: report indexes an observation outside an empty confirmed contract | studio (tooling) | low | `ac4916df` | — | **open** — Studio-side |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -1060,4 +1064,72 @@ approved observations.
 Worth noting for the exercise: Studio modelled `set_proposer` as a free-standing
 action reachable in any state, which is a faithful model of the API and is exactly
 the freedom the defect lives in. The model was right; the API was wrong.
+
+## F-34 — The fast-driver component reached `ready`, and its tests needed a control
+
+- **Found against:** `ac4916df` · **Fixed in:** `c796d359` · **Source:** Studio coverage run
+  plus my own mutation check
+
+Studio's `fast-driver` run completed: `ready`, `wired`, 8 logged tests, **0 product bugs**,
+3 findings. One (`guard_scenario` on `FreshProposalskeep`) Studio triaged itself as
+`out-of-scope`, and its reasoning holds — the guard is reachable only from inside
+`Driver::apply_proposal`, so an event for it would nest inside `Driverprocess` where the
+model has no place for it, and the same two conditions are already observed on the
+instrumented path.
+
+### F-34b, F-34c — two genuine driver-level gaps, and Studio wrote the tests
+`equivocating_vote_not_tallied` (182 of 3000 samples) and
+`vote_from_a_non_validator_discarded` (123 of 3000). Both were untested because every
+other test in the file votes each validator at most once, with addresses drawn only from
+the set it built. Studio generated a test for each, marked `#[ignore]`. Both passed, so
+both are adopted.
+
+I had independently written the same two tests before noticing Studio's. Mine were
+dropped: Studio's carry `reproduces obs:...` traceability back to the observation.
+
+### F-34a — but the generated tests could not fail
+Every assertion in both generated tests is negative — "no decision was produced". They
+therefore hold on a driver that can **never decide at all**, which is the exact vacuity
+shape [F-26] and [F-33b] are about.
+
+**Proved rather than asserted.** Replacing the `RoundOutput::Decision` arm of `resolve`
+with a discard:
+
+| Test | On the mutant |
+| --- | --- |
+| Studio's two, as generated | **pass** — vacuous |
+| The same two, with a control added | **fail** — falsifiable |
+
+Each now ends by asserting that a legitimate fifth vote still decides. This is the second
+time Studio produced a correct-but-unfalsifiable artifact ([F-33b] was the first, and
+Studio caught that one itself). The pattern is worth stating plainly: **Studio is reliable
+at finding which sequences are unreached, and less reliable at making the resulting test
+able to fail.** Mutation-checking every generated test before adopting it is the cheap
+countermeasure.
+
+### F-34d — the coverage insight cannot be read
+`get_component_insights` with `sections: ["coverage"]` fails with `invalid report: sampled
+family references observation index 1 outside the confirmed contract`. The component
+reached `ready` with `observationsConfirmed: false` and `confirmedObservations: []`, yet
+its report indexes observations positionally. `evidence` and `status` read fine, so the
+findings above were recoverable. Studio-side; recorded, not actionable from here.
+
+## F-32d — fixed
+
+`Input::NewRound(Round)` became `Input::NewRound(Round, Ctx::Address)` and `set_proposer`
+is gone. The ordering hazard is not guarded against, it is unrepresentable: there is no
+longer a way to enter a round without naming its proposer. `set_proposer` had no production
+caller, so the change cost 7 test call sites.
+
+`the_proposer_of_the_previous_round_does_not_answer_for_the_next` pins it: a node that
+proposes round 0 and then enters round 1 under a different proposer must take neither
+proposer path, and must schedule the L18 propose timeout instead.
+
+**One hazard I introduced and caught while doing it.** My first pass rewrote every bare
+`Input::NewRound(Round::new(n))` in the tests to pass `a[0]`. But `driver_with(false)`
+builds a driver whose round-0 proposer is `a[1]`, so that silently made *us* the proposer
+in every test that had deliberately arranged not to be. It failed to compile for an
+unrelated reason, which is the only reason I looked. The redo substitutes per test,
+reading each one's `driver_with` argument. A mechanical rewrite across tests is exactly
+where a semantic change hides behind a passing suite.
 

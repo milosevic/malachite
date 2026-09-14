@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 quint-oracle = { path = "../../../quint-specs/oracle-client/rust" }
+malachitebft-core-types = { workspace = true, features = ["serde"] }
 bytesize = { workspace = true, features = ["serde"] }
 humantime-serde = { workspace = true }
 multiaddr = { workspace = true }

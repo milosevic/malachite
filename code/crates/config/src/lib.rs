@@ -4,6 +4,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use bytesize::ByteSize;
+use malachitebft_core_types::ConsensusProtocol;
 use multiaddr::Multiaddr;
 use serde::{Deserialize, Serialize};
 
@@ -910,6 +911,21 @@ fn default_wal_replay_delay() -> Duration {
 /// Consensus configuration options
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConsensusConfig {
+    /// Which consensus protocol this node runs: `classic` or `fast`.
+    ///
+    /// `classic` is Tendermint as Malachite has always run it — `f < n/3`, three
+    /// communication steps. `fast` is Fast Tendermint (Vander Vos & Cason,
+    /// arXiv:2608.13434) — `f < n/5`, two communication steps.
+    ///
+    /// The two are **not** interoperable, so every validator in a set must be
+    /// configured the same way. Nothing in this node verifies that; it is a
+    /// genesis-time decision for the whole network.
+    ///
+    /// Defaults to `classic`, so an existing configuration file keeps its
+    /// behaviour without being touched.
+    #[serde(default)]
+    pub protocol: ConsensusProtocol,
+
     /// Enable consensus protocol participation
     ///
     /// When disabled, the node only runs the synchronization protocol
@@ -956,6 +972,7 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
+            protocol: ConsensusProtocol::default(),
             enabled: true,
             p2p: P2pConfig::default(),
             value_payload: ValuePayload::default(),
@@ -1139,6 +1156,53 @@ impl fmt::Display for LogFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serialize the default consensus config, drop the `protocol` line, and parse
+    /// what is left. That is the shape of every configuration file written before
+    /// the field existed, and it must still select classic Tendermint.
+    #[test]
+    fn consensus_config_written_before_the_protocol_field_still_runs_classic() {
+        let full = toml::to_string(&ConsensusConfig::default()).unwrap();
+        assert!(
+            full.contains("protocol = \"classic\""),
+            "the default must serialize as classic, got:\n{full}"
+        );
+
+        let without: String = full
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("protocol ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let config: ConsensusConfig = toml::from_str(&without).unwrap();
+        assert_eq!(config.protocol, ConsensusProtocol::Classic);
+    }
+
+    /// An operator can name the fast protocol. Whether this node can *run* it is
+    /// `spawn_consensus_actor`'s decision; parsing must succeed either way, or the
+    /// operator gets a syntax error instead of the real reason.
+    #[test]
+    fn consensus_config_accepts_the_fast_protocol() {
+        let full = toml::to_string(&ConsensusConfig::default()).unwrap();
+        let fast = full.replace("protocol = \"classic\"", "protocol = \"fast\"");
+        assert_ne!(fast, full, "the replacement must have matched");
+
+        let config: ConsensusConfig = toml::from_str(&fast).unwrap();
+        assert_eq!(config.protocol, ConsensusProtocol::Fast);
+    }
+
+    /// Anything else is rejected rather than silently defaulted, so a typo like
+    /// `protocol = "Fast"` cannot start a node on the protocol it did not ask for.
+    #[test]
+    fn consensus_config_rejects_an_unknown_protocol() {
+        let full = toml::to_string(&ConsensusConfig::default()).unwrap();
+        for bad in ["\"Fast\"", "\"tendermint\"", "\"5f+1\""] {
+            let text = full.replace("protocol = \"classic\"", &format!("protocol = {bad}"));
+            assert!(
+                toml::from_str::<ConsensusConfig>(&text).is_err(),
+                "protocol = {bad} should not parse"
+            );
+        }
+    }
 
     #[test]
     fn discovery_config_deserializes_without_max_peers_per_response() {

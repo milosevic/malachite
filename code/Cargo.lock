@@ -248,6 +248,7 @@ dependencies = [
 name = "arc-malachitebft-config"
 version = "0.8.0"
 dependencies = [
+ "arc-malachitebft-core-types",
  "bytesize",
  "humantime-serde",
  "multiaddr",

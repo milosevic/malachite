@@ -62,9 +62,8 @@ fn vote(round: u32, v: u64, addr: Address) -> SignedVote<TestContext> {
 #[test]
 fn an_unjustified_reproposal_is_not_accepted() {
     let (a, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
-    d.set_proposer(a[1]);
-    d.process(Input::NewRound(Round::new(1)));
+    d.process(Input::NewRound(Round::new(0), a[1]));
+    d.process(Input::NewRound(Round::new(1), a[1]));
 
     // Nobody has voted, so nothing justifies a re-proposal claiming round 0.
     let out = d.process(Input::Proposal(reproposal(1, 7, 0, a[1]), Validity::Valid));
@@ -80,15 +79,14 @@ fn an_unjustified_reproposal_is_not_accepted() {
 #[test]
 fn a_justified_reproposal_is_accepted() {
     let (a, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
+    d.process(Input::NewRound(Round::new(0), a[1]));
 
     // Three of six validators vote for the value in round 0: that is 2f+1.
     for i in 0..3 {
         d.process(Input::Vote(vote(0, 7, a[i])));
     }
 
-    d.set_proposer(a[1]);
-    d.process(Input::NewRound(Round::new(1)));
+    d.process(Input::NewRound(Round::new(1), a[1]));
     let out = d.process(Input::Proposal(reproposal(1, 7, 0, a[1]), Validity::Valid));
 
     match out.as_slice() {
@@ -108,14 +106,13 @@ fn a_justified_reproposal_is_accepted() {
 #[test]
 fn a_decision_pairs_a_quorum_with_a_proposal_from_an_earlier_round() {
     let (a, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
+    d.process(Input::NewRound(Round::new(0), a[1]));
 
     // A fresh proposal in round 0, which we retain.
     d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Valid));
 
     // Move on, then reach n-f votes for that value in a LATER round.
-    d.set_proposer(a[2]);
-    d.process(Input::NewRound(Round::new(1)));
+    d.process(Input::NewRound(Round::new(1), a[2]));
 
     let mut decided = None;
     for i in 0..5 {
@@ -143,7 +140,7 @@ fn a_decision_pairs_a_quorum_with_a_proposal_from_an_earlier_round() {
 #[test]
 fn a_quorum_that_arrives_before_its_proposal_still_decides() {
     let (a, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
+    d.process(Input::NewRound(Round::new(0), a[1]));
 
     // The quorum lands first. Nothing supplies the value yet, so nothing decides.
     for i in 0..5 {
@@ -170,7 +167,7 @@ fn a_quorum_that_arrives_before_its_proposal_still_decides() {
 #[test]
 fn an_invalid_proposal_never_supplies_a_decision() {
     let (a, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
+    d.process(Input::NewRound(Round::new(0), a[1]));
 
     d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Invalid));
 
@@ -194,7 +191,7 @@ fn an_invalid_proposal_never_supplies_a_decision() {
 #[test]
 fn a_proposer_that_cannot_build_its_reproposal_still_schedules_a_timeout() {
     let (a, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
+    d.process(Input::NewRound(Round::new(0), a[1]));
 
     // 2f+1 votes make the value valid. No proposal for it was ever seen.
     for i in 0..3 {
@@ -202,8 +199,7 @@ fn a_proposer_that_cannot_build_its_reproposal_still_schedules_a_timeout() {
     }
 
     // We propose round 1, holding (0, id(7)) valid with no value behind it.
-    d.set_proposer(a[0]);
-    let out = d.process(Input::NewRound(Round::new(1)));
+    let out = d.process(Input::NewRound(Round::new(1), a[0]));
 
     assert!(
         out.iter().any(|o| matches!(
@@ -225,7 +221,7 @@ fn a_proposer_that_cannot_build_its_reproposal_still_schedules_a_timeout() {
 #[test]
 fn a_repropose_is_resolved_into_a_full_proposal() {
     let (a, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
+    d.process(Input::NewRound(Round::new(0), a[1]));
     d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Valid));
 
     // 2f+1 votes make it valid, so a later round re-proposes it.
@@ -234,8 +230,7 @@ fn a_repropose_is_resolved_into_a_full_proposal() {
     }
 
     // We are the proposer of round 1, and we already hold a valid value.
-    d.set_proposer(a[0]);
-    let out = d.process(Input::NewRound(Round::new(1)));
+    let out = d.process(Input::NewRound(Round::new(1), a[0]));
 
     match out.as_slice() {
         [Output::Proposal(p)] => {
@@ -253,8 +248,8 @@ fn a_repropose_is_resolved_into_a_full_proposal() {
 /// ignored rather than misrouted.
 #[test]
 fn timeouts_route_by_kind() {
-    let (_, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
+    let (a, mut d) = driver_with(false);
+    d.process(Input::NewRound(Round::new(0), a[1]));
 
     let out = d.process(Input::TimeoutElapsed(Timeout {
         round: Round::new(0),
@@ -284,7 +279,7 @@ fn timeouts_route_by_kind() {
 #[test]
 fn an_equivocating_vote_cannot_manufacture_a_decision() {
     let (a, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
+    d.process(Input::NewRound(Round::new(0), a[1]));
 
     // The value is proposed and retained, so only the votes stand between us and L42.
     d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Valid));
@@ -333,7 +328,7 @@ fn an_equivocating_vote_cannot_manufacture_a_decision() {
 #[test]
 fn a_vote_from_outside_the_validator_set_cannot_manufacture_a_decision() {
     let (a, mut d) = driver_with(false);
-    d.process(Input::NewRound(Round::new(0)));
+    d.process(Input::NewRound(Round::new(0), a[1]));
 
     // The value is proposed and retained, so only the votes stand between us and L42.
     d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Valid));
@@ -364,4 +359,39 @@ fn a_vote_from_outside_the_validator_set_cannot_manufacture_a_decision() {
         "a legitimate fifth vote must still decide, got {out:?}"
     );
     assert_eq!(d.decision().map(|(_, v)| v.clone()), Some(Value::new(7)));
+}
+
+/// Entering a round names that round's proposer, so the proposer of the round we just left
+/// cannot answer for the round we are entering (F-32d).
+///
+/// `start_round` (L6-L18) is the only place the fast state machine consults the proposer,
+/// and it decides there whether to propose or to wait for one. Before the proposer was
+/// carried in the input, a caller that entered round 1 without first announcing its
+/// proposer kept round 0's — so a node that proposed round 0 would take the proposer path
+/// again in round 1, and the mirror case would miss its own slot and stall the round.
+#[test]
+fn the_proposer_of_the_previous_round_does_not_answer_for_the_next() {
+    // We propose round 0.
+    let (a, mut d) = driver_with(true);
+    let out = d.process(Input::NewRound(Round::new(0), a[0]));
+    assert!(
+        out.iter()
+            .any(|o| matches!(o, Output::GetValueAndScheduleTimeout(..))),
+        "we propose round 0, so the application is asked for a value, got {out:?}"
+    );
+
+    // Round 1 belongs to someone else, and saying so is now the only way to enter it.
+    let out = d.process(Input::NewRound(Round::new(1), a[1]));
+    assert!(
+        !out.iter()
+            .any(|o| matches!(o, Output::GetValueAndScheduleTimeout(..) | Output::WaitForValid(_))),
+        "we do not propose round 1, so neither proposer path may be taken, got {out:?}"
+    );
+    assert!(
+        out.iter().any(|o| matches!(
+            o,
+            Output::ScheduleTimeout(t) if t.kind == TimeoutKind::Propose && t.round == Round::new(1)
+        )),
+        "L18: a non-proposer waits for the proposal under a propose timeout, got {out:?}"
+    );
 }

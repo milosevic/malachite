@@ -20,8 +20,16 @@ use crate::fast::proposals::FreshProposals;
 /// What the driver is asked to do.
 #[derive_where(Clone, Debug, PartialEq, Eq)]
 pub enum Input<Ctx: Context> {
-    /// Start a round.
-    NewRound(Round),
+    /// Start a round, naming its proposer.
+    ///
+    /// The proposer is carried here rather than set by a separate call because
+    /// `start_round` is the only place the fast state machine consults it (L6-L18), and a
+    /// round entered with the previous round's proposer takes the wrong branch there: a
+    /// node that proposed `r-1` and does not propose `r` would follow the proposer path in
+    /// `r`, and the mirror case would silently miss its own proposal slot. Folding it into
+    /// the input means the question cannot be asked. The classic driver does the same
+    /// (`Input::NewRound(height, round, proposer)`).
+    NewRound(Round, Ctx::Address),
     /// The application built a value for us to propose.
     ProposeValue(Round, Ctx::Value),
     /// A proposal arrived, with the application's verdict on its validity.
@@ -61,6 +69,8 @@ pub struct Driver<Ctx: Context> {
     ctx: Ctx,
     address: Ctx::Address,
     validator_set: Ctx::ValidatorSet,
+    /// The proposer of the round we are at. Only `Input::NewRound` writes it, so it can
+    /// never describe a round other than the one we last entered.
     proposer: Ctx::Address,
     vote_keeper: FastVoteKeeper<Ctx>,
     proposals: FreshProposals<Ctx>,
@@ -151,19 +161,6 @@ impl<Ctx: Context> Driver<Ctx> {
         &self.validator_set
     }
 
-    /// Set the proposer for the round being entered.
-    pub fn set_proposer(&mut self, proposer: Ctx::Address) {
-        self.proposer = proposer;
-
-        if quint_oracle::enabled() {
-            let address = self.oracle_addr(&self.proposer);
-            quint_oracle::Event::builder(quint_oracle::current_test(), "Driverset_proposer")
-                .argument("address", address, Some("VALIDATORS"))
-                .scope("fast-driver")
-                .send();
-        }
-    }
-
     /// Apply one input and return everything the caller should act on.
     pub fn process(&mut self, input: Input<Ctx>) -> Vec<Output<Ctx>> {
         // Quint oracle: describe the input the way the spec models it — the
@@ -183,7 +180,7 @@ impl<Ctx: Context> Driver<Ctx> {
             oracle_kind,
         ) = if oracle_on {
             match &input {
-                Input::NewRound(round) => (
+                Input::NewRound(round, _) => (
                     "NewRound",
                     round.as_i64(),
                     alloc::string::String::from("v"),
@@ -307,7 +304,12 @@ impl<Ctx: Context> Driver<Ctx> {
     /// Quint oracle without the match arms having to know about it.
     fn process_inner(&mut self, input: Input<Ctx>) -> Vec<Output<Ctx>> {
         match input {
-            Input::NewRound(round) => self.apply_round(RoundInput::NewRound(round), round),
+            Input::NewRound(round, proposer) => {
+                // Recorded before `apply_round`, because `start_round` reads it through
+                // `Info::is_proposer` on this very call.
+                self.proposer = proposer;
+                self.apply_round(RoundInput::NewRound(round), round)
+            }
 
             Input::ProposeValue(round, value) => {
                 self.apply_round(RoundInput::ProposeValue(value), round)

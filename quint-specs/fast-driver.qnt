@@ -940,6 +940,26 @@ module fast_driver {
       Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind)
     },
 
+    // Arm 3b — the QUORUM-FIRST lane. L42's two arrival orders are not equally
+    // easy to walk into: a proposal for the identifier almost always lands
+    // before the fifth vote, so the proposal edge — the order the code lost
+    // entirely until the symmetric re-check was added — needs an arm that
+    // withholds the proposal until the quorum is already latched.
+    {
+      nondet inputTag =
+        (if (hasAnyDecisionQuorum(d.kv, L42_VALUE)) Set("Proposal") else Set("Vote")).oneOf()
+      nondet ivalue = Set(L42_VALUE).oneOf()
+      nondet ipol = Set(-1).oneOf()
+      nondet ivalidity = Set(true).oneOf()
+      nondet ivtype = Set("Precommit").oneOf()
+      nondet ikind = Set("Propose").oneOf()
+      nondet ivoter =
+        VALIDATORS.filter(a => not(hasFirstVote(d.kv, L42_ROUND, a)))
+                  .union(Set(ME)).oneOf()
+      val iround = L42_ROUND
+      Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind)
+    },
+
     // Arm 4 — becoming the proposer. L15-L16's re-propose path is only reached
     // by the node that proposes the round it enters, so the walk has to pass
     // through here for `repropose_resolved_to_a_full_proposal` to exist.
