@@ -70,8 +70,11 @@ independent reviewer, not by Studio or by the tests.
 | F-38d | Nothing tested that the check is *called*; deleting both call sites passed every test | reviewer (round 9) | low | `a482a480` | next commit | **fixed structurally** |
 | F-38e | Misplaced doc comment: my insertion gave the discovery docstring to a new test | reviewer (round 9) | low | `a482a480` | next commit | **fixed** |
 | F-38f | `MALACHITE__CONSENSUS__PROTOCOL` is case-insensitive, unlike the TOML path the test documents | reviewer (round 9) | low | `a482a480` | next commit | **fixed** — docstring scoped |
-| F-39a | `corruption::truncate_on_corruption` asserted pre-rework WAL semantics and failed deterministically on this branch | me (full-suite run) | medium | branch lineage, pre-`ac4916df` | next commit | **fixed** — superseded test removed |
-| F-39b | `crashes::concurrent_crash_recovery` is flaky under parallel execution (1 failure in 5 full-suite runs, 0 in 14 isolated) | me (full-suite run) | low | pre-existing, also upstream | — | **open** — not branch-specific |
+| F-39a | `corruption::truncate_on_corruption` asserted pre-rework WAL semantics and failed deterministically on this branch | me (full-suite run) | medium | branch lineage, pre-`ac4916df` | `563ae427` | **fixed** — upstream **duplicate** removed (provenance corrected, see F-39d) |
+| F-39b | `crashes::concurrent_crash_recovery` is flaky under parallel execution (1 failure in 5 full-suite runs, 0 in 18 isolated) | me (full-suite run) | low | pre-existing, also upstream | — | **open** — not branch-specific |
+| F-39c | `discovery::multiple_persistent_peers_only_nodes` is flaky: 2 of 5 isolated runs here, 1 of 5 at upstream `72143f6c` | me (full-suite run) | low | pre-existing, also upstream | — | **open** — not branch-specific |
+| F-39d | My own commit message got the provenance backwards: the surviving tests are **upstream**, not brought by the rework | reviewer (round 10) | medium | `f8e2d7e6` | `563ae427` | **fixed** — amended |
+| F-40 | `fetch_entries` dropped upstream's `truncate` + `break`, so a corrupt WAL is never repaired and the node hangs on **every** restart | reviewer (round 10) | medium | branch lineage | — | **open** — maintainer decision, untested either way |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -1591,4 +1594,74 @@ had been running the crates I touched (`core-*`, `config`, `app`, the `test` int
 suite) rather than `--workspace`. That is exactly the gap a scoped test command leaves,
 and it is the same shape as the reviewer's round-9 finding that deleting a call site left
 99 tests green. **Run the whole suite before claiming the tree is clean.**
+
+## F-39d / F-40 — Tenth review: the deletion was right, my reasoning for it was not
+
+- **Source:** independent reviewer, on a commit I had already made **without review** —
+  which is exactly the gate this project requires, and deleting a test is the kind of
+  "obviously safe" change that most deserves it.
+
+**Verdict: do not revert.** The reviewer proved by mutation that coverage is preserved and
+in fact *strengthened* — making `damaged()` report `Ok(())` fails **six** tests
+(`truncate_on_corruption_at_0` through `_at_4`, plus `corruption::corrupted_crc`), and the
+surviving `verify_wal_scan` adds a loop asserting every non-corrupt entry still reads back,
+which the deleted version never checked. `_at_5.._at_9` correctly pass on the mutant because
+`idx >= entry_count` applies no corruption. Range `0..10` ≡ `_at_0.._at_9`, no off-by-one;
+zero warnings from the test target; `setup_valid_wal` correctly retained.
+
+### F-39d — the provenance claim in my commit message was false
+I wrote that "the rework brought its own tests". It did not. Upstream `38f113f6` — the
+"detect corrupted WAL entries and hang indefinitely" commit — created the **same test
+twice**, in `corruption.rs` and in `truncation.rs`, and *both* copies used
+`verify_wal_state_pre_fix`. The branch then updated only the `truncation.rs` copy, renaming
+the helper to `verify_wal_scan` and **inverting its central assertion** from
+`results.len() == corrupt_idx + 1` to `results.len() == total`.
+
+So the surviving tests are not independent corroboration of the new semantics — they are
+the *same* test with its assertion flipped to match the new code, and what I deleted was
+the duplicate that got missed. "Deleted an upstream duplicate" is the honest description.
+**Commit message amended** (`f8e2d7e6` → `563ae427`, unpushed at the time).
+
+Worth stating plainly: I reached the right action through a wrong story, and the wrong
+story was the *more flattering* one — it said the rework was well-tested when in fact its
+only test is a re-assertion of itself.
+
+### F-40 — and a real unreviewed change to classic behaviour next door
+`engine/src/wal/thread.rs`. Upstream's `fetch_entries`, on a read error, did
+`entries.push(Err(e)); log.truncate(idx)?; break;`. The branch keeps only the push.
+
+| | corrupt WAL is | on restart |
+| --- | --- | --- |
+| upstream | **truncated** to the clean prefix | replays the prefix and proceeds |
+| this branch | left untouched | hangs again, **every time, forever** |
+
+The branch's comment gives a real reason — a discarded post-corruption entry may be a vote
+this node already broadcast, and forgetting it is an equivocation hazard — so this is
+arguably the *safer* choice, and the reviewer declined to call it a bug. But it is a
+deliberate change to **classic** WAL behaviour on a branch whose hard constraint is
+preserving classic functionality exactly, it is documented only in a code comment, and
+**no test covers it in either direction** (`test/tests/it/wal.rs` has no corrupt-WAL case).
+
+**Left open as a maintainer decision, deliberately not "fixed".** Choosing between two
+defensible recovery semantics on classic code is not mine to make silently, and pinning the
+current behaviour with a test would risk enshrining the wrong one — the [F-32b] lesson. The
+safety question that would have made it urgent came back clean: `wal_replay` calls
+`hang_on_safety_failure` at the **first** `Err`, and the damaged entry always precedes
+anything behind it, so post-corruption entries are never fed to the driver. `38f113f6`'s
+hang-on-error posture is intact.
+
+### F-39c — the second flake, which I had omitted
+The reviewer noted the ledger recorded only the wal flake from that run.
+`discovery::multiple_persistent_peers_only_nodes` fails **2 of 5 isolated runs** here and
+**1 of 5 at upstream `72143f6c`** — and `network/test/tests/discovery.rs` is byte-identical
+to upstream. Pre-existing, not branch-specific. The branch does add 13 tests to the sibling
+`persistent_peers.rs` binary, which raises parallel load in a `--workspace` run: a plausible
+aggravator, not a defect.
+
+### The process finding, which is the point
+Every status I gave this session said the classic suites were green, and they were — I had
+been running the crates I touched rather than `--workspace`. That is the same shape as
+[F-38d], where deleting a safety check left 99 tests green. **Run the whole suite before
+claiming the tree is clean**, and route every commit through the reviewer first — including,
+especially, the ones that look too small to need it.
 
