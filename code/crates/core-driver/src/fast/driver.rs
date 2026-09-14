@@ -170,6 +170,13 @@ impl<Ctx: Context> Driver<Ctx> {
         // are pinned to values the model always holds, so replay never searches
         // them blind.
         let oracle_on = quint_oracle::enabled();
+        // Every input but NewRound leaves the proposer alone, so the model's
+        // pick is pinned to the one we already hold.
+        let oracle_current_proposer = if oracle_on {
+            self.oracle_addr(&self.proposer)
+        } else {
+            "a"
+        };
         let (
             oracle_tag,
             oracle_round,
@@ -179,9 +186,12 @@ impl<Ctx: Context> Driver<Ctx> {
             oracle_voter,
             oracle_vtype,
             oracle_kind,
+            oracle_proposer,
         ) = if oracle_on {
             match &input {
-                Input::NewRound(round, _) => (
+                // The proposer travels WITH the round, so it is part of the
+                // input the model replays — not a separate call any more.
+                Input::NewRound(round, proposer) => (
                     "NewRound",
                     round.as_i64(),
                     alloc::string::String::from("v"),
@@ -190,6 +200,7 @@ impl<Ctx: Context> Driver<Ctx> {
                     "a",
                     "Precommit",
                     "Propose",
+                    self.oracle_addr(proposer),
                 ),
                 Input::ProposeValue(round, value) => (
                     "ProposeValue",
@@ -200,6 +211,7 @@ impl<Ctx: Context> Driver<Ctx> {
                     "a",
                     "Precommit",
                     "Propose",
+                    oracle_current_proposer,
                 ),
                 Input::Proposal(proposal, validity) => (
                     "Proposal",
@@ -210,6 +222,7 @@ impl<Ctx: Context> Driver<Ctx> {
                     "a",
                     "Precommit",
                     "Propose",
+                    oracle_current_proposer,
                 ),
                 Input::Vote(vote) => (
                     "Vote",
@@ -227,6 +240,7 @@ impl<Ctx: Context> Driver<Ctx> {
                         "Prevote"
                     },
                     "Propose",
+                    oracle_current_proposer,
                 ),
                 Input::TimeoutElapsed(timeout) => (
                     "TimeoutElapsed",
@@ -243,6 +257,7 @@ impl<Ctx: Context> Driver<Ctx> {
                         TimeoutKind::Rebroadcast => "Rebroadcast",
                         _ => "FinalizeHeight",
                     },
+                    oracle_current_proposer,
                 ),
                 Input::WaitForValidExpired => (
                     "WaitForValidExpired",
@@ -253,6 +268,7 @@ impl<Ctx: Context> Driver<Ctx> {
                     "a",
                     "Precommit",
                     "Propose",
+                    oracle_current_proposer,
                 ),
             }
         } else {
@@ -265,6 +281,7 @@ impl<Ctx: Context> Driver<Ctx> {
                 "a",
                 "Precommit",
                 "Propose",
+                "a",
             )
         };
 
@@ -280,6 +297,7 @@ impl<Ctx: Context> Driver<Ctx> {
                 .argument("ivoter", oracle_voter, Some("VOTERS"))
                 .argument("ivtype", oracle_vtype, Some("VOTE_TYPES"))
                 .argument("ikind", oracle_kind, Some("KIND_NAMES"))
+                .argument("iproposer", oracle_proposer, Some("VALIDATORS"))
                 // Conformance facts: the round the driver is at, and how many
                 // outputs the call actually returned.
                 .assert(

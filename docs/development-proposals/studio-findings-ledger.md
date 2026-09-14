@@ -1665,3 +1665,51 @@ been running the crates I touched rather than `--workspace`. That is the same sh
 claiming the tree is clean**, and route every commit through the reviewer first — including,
 especially, the ones that look too small to need it.
 
+---
+
+## RESUME HERE — `fast-driver` is parked at an open Studio gate
+
+Stopped mid-pipeline at the user's request. Nothing is running; the Studio worker is
+parked and resumable.
+
+**State:** `fast-driver`, stage `wire`, worker 404, `activeTask.status =
+awaiting_input`, `pendingReview` id 33 at checkpoint `instrumentation_result`.
+All drift is now false. `cargo test --test fast_driver` 15/15, workspace clean.
+
+**What the worker did** (its own summary: "the spec was two commits behind the code"):
+- brought `fast-driver.qnt` into line with F-32d, F-36a, F-36b, F-37c and F-37d;
+- dropped the `set_proposer` action rather than keeping it as a sim-only fiction;
+- added one invariant, `the_proposer_describes_the_round_we_are_in`, **mutation-verified**,
+  and registered it through `write_oracle_config`;
+- logs `iproposer` on every `Driverprocess` event;
+- deliberately left the 18 observations untouched.
+
+**Its own stated risks:** `a_decision_is_never_revised` still cannot be falsified by random
+search — reaching a contradicting second decision needs two independent `n-f` quorums for
+different identifiers, which six unit-weight validators cannot produce in a sampling
+budget; it judges this a search limit, not vacuity, since the model guards it twice. And
+the address-to-letter map still assumes at most six validators.
+
+**The decision waiting on me: REJECT with changes.** The worker did not drop
+`keeper_outputs_keep_their_reported_round`, which [F-33c] proves is a **tautology** — it
+is still registered, and `fast-driver.qnt:624` still reads
+`val drifted = r.round != roundOfKOut(o)`, where `routeKOut` sets `.round` by projecting
+the same field of the same keeper output that `roundOfKOut` projects, on all three
+branches. It cannot fail under any mutation of the Rust. The rejection should say exactly
+that and ask for it to be dropped, and should ask whether [F-33a] (the letter map aliasing
+validator 0 onto `a` when the node is outside its own validator set) is now closed.
+
+**Then, still queued:**
+1. Drive `fast-driver` through to an actual completed coverage run.
+2. `fast-round-state-machine` — code drift from the `awaiting_valid` clear and the two
+   `NewRound` guards; **has never published a report**, so it has never been measured.
+3. `fast-vote-keeper` — code drift, `lastRun: null`; setup complete and wired, 20
+   observations and 12 properties confirmed, but **never run either**.
+4. F-37a / F-37b — the latched `2f+1` quorum never re-offered on round entry.
+5. F-40 — the WAL truncate-on-corruption removal, awaiting a maintainer decision.
+
+**Not yet reviewed:** the worker's edit to `core-driver/src/fast/driver.rs` in this commit
+is Studio-generated instrumentation that has not been through the independent reviewer. It
+builds and the suite is green, but it should be reviewed on resume before anything is built
+on top of it.
+

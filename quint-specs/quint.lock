@@ -4629,7 +4629,7 @@ confirmedObservations = []
 confirmedProperties = []
 retiredObservations = []
 retiredProperties = []
-wireConfirmed = true
+wireConfirmed = false
 setupCompleted = true
 cardsDone = false
 
@@ -4658,21 +4658,6 @@ observations = [
     "equivocating_vote_not_tallied",
     "vote_from_a_non_validator_discarded",
     "fresh_proposal_retained",
-]
-testCommand = [
-    "/Users/zarkomilosevic/.cargo/bin/cargo",
-    "test",
-    "--manifest-path",
-    "code/Cargo.toml",
-    "-p",
-    "arc-malachitebft-core-driver",
-    "--features",
-    "quint-oracle/enabled",
-    "--test",
-    "fast_driver",
-    "--no-fail-fast",
-    "--",
-    "--test-threads=1",
 ]
 unguidedStepBudget = 10
 stepReplayBudget = 50
@@ -4751,7 +4736,7 @@ properties = ["valid_never_records_a_round_above_our_own"]
 
 [components.fast-driver.fingerprints]
 spec = "fnv1a64:ca11a75249a86e89"
-oracle = "fnv1a64:e195aa0501049706"
+oracle = "fnv1a64:f8275e0683f9233c"
 coverage = "fnv1a64:b9e4e40b99434d83"
 
 [components.fast-driver.fingerprints.code]
@@ -4760,18 +4745,6 @@ coverage = "fnv1a64:b9e4e40b99434d83"
 "crates/core-driver/src/fast/proposals.rs" = ""
 
 [components.fast-driver.fingerprints.instrumented]
-"code/crates/core-driver/src/fast/driver.rs" = "fnv1a64:93fc0ec105243388"
-"quint-specs/oracle-client/rust/Cargo.toml" = "fnv1a64:a7f7cce4cf73716a"
-"quint-specs/oracle-client/rust/macros/Cargo.toml" = "fnv1a64:25ae8e87ca1e5587"
-"quint-specs/oracle-client/rust/macros/src/lib.rs" = "fnv1a64:c79c00a5f82c3cde"
-"quint-specs/oracle-client/rust/src/lib.rs" = "fnv1a64:7d13f0968325a5d8"
-"quint-specs/oracle-client/rust/src/live.rs" = "fnv1a64:0c96171212feb445"
-"quint-specs/oracle-client/rust/src/live/event.rs" = "fnv1a64:b610035d6435249f"
-"quint-specs/oracle-client/rust/src/live/registry.rs" = "fnv1a64:bf4890ead6ba9d19"
-"quint-specs/oracle-client/rust/src/live/transport.rs" = "fnv1a64:8712d4e9bdf961d7"
-"quint-specs/oracle-client/rust/src/live/value.rs" = "fnv1a64:7c5a5dd102552994"
-"quint-specs/oracle-client/rust/src/macros.rs" = "fnv1a64:f7fd3cd5981f3e14"
-"quint-specs/oracle-client/rust/src/stubs.rs" = "fnv1a64:125aae12fca00bd5"
 
 [[components.fast-driver.findingVerdicts]]
 subject = "obs:equivocating_vote_not_tallied"

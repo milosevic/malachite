@@ -128,7 +128,7 @@ module fast_driver {
 
   /// The result of one driver call: the new state, the outputs it returned, the
   /// outcome classes it hit, and the paper-rule violations it committed.
-  type DRes = { d: DState, outs: List[DOut], tags: Set[str], bad: Set[str] }
+  type DRes = { d: DState, outs: List[DOut], tags: Set[str], bad: Set[str], ok: bool }
 
   //--------------------------------------------------------------------------
   // Domains for the nondet picks
@@ -251,7 +251,12 @@ module fast_driver {
   }
 
   pure def startRound(s0: SMState, i: Info, round: Round): Result = {
-    val s1 = withStep(updateRound(s0, round), Propose)
+    // `awaiting_valid` is scoped to the round that set it: it means "we propose
+    // THIS round and are waiting to learn a valid value first" (L10-L11).
+    // Entering any round clears it, and only the proposer branch sets it again.
+    // Without this it survived into a round we do not propose, and the L36 guard
+    // `awaiting_valid and is_proposer()` would rest entirely on the proposer.
+    val s1 = { ...withStep(updateRound(s0, round), Propose), awaiting_valid: false }
     if (not(isProposer(i)))
       if (checkTimeout(s1, TPropose))
         { st: recordTimeout(s1, TPropose), out: scheduleTimeout(round, TPropose), ok: true }
@@ -266,8 +271,13 @@ module fast_driver {
   pure def applyInput(s: SMState, i: Info, input: RInput): Result = {
     val thisRound = s.round == i.input_round
     match input {
+      // The round must be DEFINED. Round::Nil is -1, so `Nil <= Nil` held and
+      // an Unstarted machine accepted NewRound(Nil), requesting a value and
+      // scheduling a propose timeout for round -1. The keeper already refuses
+      // undefined rounds; the state machine does too.
       | RNewRound(r) =>
-          if (s.decision != NoDec) { st: s, out: ONone, ok: false }
+          if (not(isDefined(r))) { st: s, out: ONone, ok: false }
+          else if (s.decision != NoDec) { st: s, out: ONone, ok: false }
           else if (s.step == Unstarted and s.round <= r) startRound(s, i, r)
           else if (s.round < r) startRound(s, i, r)
           else { st: s, out: ONone, ok: false }
@@ -317,8 +327,11 @@ module fast_driver {
             else { st: s2, out: ONone, ok: true }
           }
 
+      // A decided node must stop arming precommit timeouts: without the
+      // decision guard it kept advancing rounds after committing, which is what
+      // the NewRound arm's own comment says must not happen.
       | RQuorumAny(r) =>
-          if (r >= s.round)
+          if (r >= s.round and s.decision == NoDec)
             if (armPrecommit(s, r))
               { st: recordArmed(s, r), out: scheduleTimeout(r, TPrecommit), ok: true }
             else { st: s, out: ONone, ok: false }
@@ -486,12 +499,13 @@ module fast_driver {
     // L15-L16: a re-propose request must never produce nothing.
     val silent = match r.out { | ORepropose(_) => res.outs.length() == 0 | _ => false }
     { d: d1, outs: res.outs, tags: res.tags,
-      bad: res.bad.union(if (silent) Set("silent_repropose") else Set()) }
+      bad: res.bad.union(if (silent) Set("silent_repropose") else Set()),
+      ok: r.ok }
   }
 
   pure def joinRes(a: DRes, b: DRes): DRes =
     { d: b.d, outs: a.outs.concat(b.outs),
-      tags: a.tags.union(b.tags), bad: a.bad.union(b.bad) }
+      tags: a.tags.union(b.tags), bad: a.bad.union(b.bad), ok: b.ok }
 
   /// Driver::apply_proposal — L20-L34. Route a proposal by whether it is fresh
   /// or a re-proposal, and in the latter case only once the keeper confirms the
@@ -637,15 +651,33 @@ module fast_driver {
   pure def applyVote(d0: DState, v: SVote, vtype: str): DRes = {
     val k = applyVoteK(d0.kv, v, vtype)
     val d1 = { ...d0, kv: k.kv }
-    val start: DRes = { d: d1, outs: List(), tags: k.tags, bad: Set() }
+    val start: DRes = { d: d1, outs: List(), tags: k.tags, bad: Set(), ok: true }
     k.outs.foldl(start, (acc, o) => stepKOut(acc, o))
   }
 
   /// Driver::process — the single entry point.
   pure def processInput(d: DState, tag: str, iround: Round, ivalue: str, ipol: Round,
-                        ivalidity: bool, ivoter: Addr, ivtype: str, ikind: str): DRes = {
+                        ivalidity: bool, ivoter: Addr, ivtype: str, ikind: str,
+                        iproposer: Addr): DRes = {
     val pvalue = if (ivalue == "Nil") "v" else ivalue
-    if (tag == "NewRound") applyRound(d, RNewRound(iround), iround)
+    // L6-L18. The proposer travels WITH the round: `start_round` is the only
+    // place the state machine consults it, and a round entered with the previous
+    // round's proposer takes the wrong branch there.
+    //
+    // It has to be in place before the input is applied, because `start_round`
+    // reads it on this very call. But the state machine REFUSES a NewRound for a
+    // round at or below the one we are in, for an undefined round, and for any
+    // round once we have decided — and a refused input must not leave us holding
+    // the proposer of a round we never entered, because every later input reads
+    // the field. So it is restored on refusal.
+    if (tag == "NewRound") {
+      val previous = d.proposer
+      val r = applyRound({ ...d, proposer: iproposer }, RNewRound(iround), iround)
+      if (r.ok) { ...r, tags: r.tags.union(Set("round_entered_with_its_proposer")) }
+      else
+        { ...r, d: { ...r.d, proposer: previous },
+          tags: r.tags.union(Set("refused_new_round_restored_the_proposer")) }
+    }
     else if (tag == "ProposeValue") applyRound(d, RProposeValue(pvalue), iround)
     else if (tag == "Proposal")
       applyProposal(d, { round: iround, value: pvalue, polRound: ipol }, ivalidity)
@@ -658,7 +690,8 @@ module fast_driver {
       // The protocol has no prevote step, and the other kinds are not per-round.
       if (kindOf(ikind) == TPropose) applyRound(d, RTimeoutPropose, iround)
       else if (kindOf(ikind) == TPrecommit) applyRound(d, RTimeoutPrecommit, iround)
-      else { d: d, outs: List(), tags: Set("timeout_kind_without_a_step_ignored"), bad: Set() }
+      else { d: d, outs: List(), tags: Set("timeout_kind_without_a_step_ignored"),
+              bad: Set(), ok: false }
     else applyRound(d, RWaitForValidExpired, d.rs.round)
   }
 
@@ -691,6 +724,13 @@ module fast_driver {
   /// Ghost: latched when a re-proposal was forwarded as justified without a
   /// 2f+1 recount backing it in the round the proposal named.
   var unjustifiedForwarded: bool
+  /// Ghost: the proposer named by the last NewRound the state machine ACCEPTED,
+  /// and the round it named. -1/"" means no round has been entered yet.
+  var enteredProposer: Addr
+  var enteredRound: Round
+  /// Ghost: latched when the proposer field stopped describing the round the
+  /// round state is in.
+  var proposerDesynced: bool
   /// Ghost: latched when a proposal the application rejected was retained.
   var retainedInvalid: bool
   /// Ghost: latched when a decision recorded a round other than the round of
@@ -722,6 +762,9 @@ module fast_driver {
     lastTags' = Set(),
     validatedValues' = Set(),
     unjustifiedForwarded' = false,
+    enteredProposer' = "b",
+    enteredRound' = -1,
+    proposerDesynced' = false,
     retainedInvalid' = false,
     decisionRoundWrong' = false,
     silentRepropose' = false,
@@ -760,6 +803,9 @@ module fast_driver {
     validatedValues' = validatedValues,
     unjustifiedForwarded' =
       (unjustifiedForwarded or r.bad.contains("unjustified_reproposal_forwarded")),
+    enteredProposer' = enteredProposer,
+    enteredRound' = enteredRound,
+    proposerDesynced' = proposerDesynced,
     retainedInvalid' = (retainedInvalid or r.bad.contains("retained_after_invalid_verdict")),
     decisionRoundWrong' =
       (decisionRoundWrong or r.bad.contains("decision_round_is_not_the_proposals")),
@@ -779,11 +825,15 @@ module fast_driver {
   /// Total: every branch returns, the ignored timeout kinds included.
   action Driverprocess(inputTag: str, iround: Round, ivalue: str, ipol: Round,
                        ivalidity: bool, ivoter: Addr, ivtype: str,
-                       ikind: str): bool = {
-    val r = processInput(d, inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind)
+                       ikind: str, iproposer: Addr): bool = {
+    val r = processInput(d, inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype,
+                         ikind, iproposer)
     // A non-precommit vote must leave the tally untouched.
     val tallyGuarded =
       not(inputTag == "Vote" and ivtype != "Precommit") or r.d.kv == d.kv
+    val entered = inputTag == "NewRound" and r.ok
+    val nextEnteredProposer = if (entered) iproposer else enteredProposer
+    val nextEnteredRound = if (entered) iround else enteredRound
     val newRetained =
       (if (r.tags.contains("fresh_proposal_retained"))
          processRetained.union(Set(if (ivalue == "Nil") "v" else ivalue))
@@ -799,6 +849,15 @@ module fast_driver {
         else validatedValues,
       unjustifiedForwarded' =
         (unjustifiedForwarded or r.bad.contains("unjustified_reproposal_forwarded")),
+      enteredProposer' = nextEnteredProposer,
+      enteredRound' = nextEnteredRound,
+      // Two independent readings of the same fact: the proposer the last
+      // ACCEPTED NewRound named, against the field every later input reads.
+      proposerDesynced' =
+        (proposerDesynced
+           or (nextEnteredRound >= 0
+                 and (r.d.proposer != nextEnteredProposer
+                        or r.d.rs.round != nextEnteredRound))),
       retainedInvalid' = (retainedInvalid or r.bad.contains("retained_after_invalid_verdict")),
       decisionRoundWrong' =
         (decisionRoundWrong or r.bad.contains("decision_round_is_not_the_proposals")),
@@ -811,12 +870,6 @@ module fast_driver {
       prevoteTallied' = (prevoteTallied or not(tallyGuarded)),
     }
   }
-
-  /// Driver::set_proposer(address) — sets the proposer for the round being
-  /// entered. Unguarded.
-  action Driverset_proposer(address: Addr): bool =
-    commit({ d: { ...d, proposer: address }, outs: List(),
-             tags: Set("proposer_set"), bad: Set() }, true)
 
   /// FreshProposals::keep(proposal) — retains a fresh proposal, reporting
   /// whether it was newly kept. Guarded by the code's two early returns: a
@@ -834,6 +887,9 @@ module fast_driver {
       // application-validity gate lives in `Driver::apply_proposal`.
       validatedValues' = validatedValues.union(Set(pvalue)),
       unjustifiedForwarded' = unjustifiedForwarded,
+      enteredProposer' = enteredProposer,
+      enteredRound' = enteredRound,
+      proposerDesynced' = proposerDesynced,
       retainedInvalid' = retainedInvalid,
       decisionRoundWrong' = decisionRoundWrong,
       silentRepropose' = silentRepropose,
@@ -849,18 +905,21 @@ module fast_driver {
   /// changes. Deliberately not pruned by round.
   action FreshProposalsclear: bool =
     commit({ d: { ...d, props: Map() }, outs: List(),
-             tags: Set("proposals_cleared"), bad: Set() }, true)
+             tags: Set("proposals_cleared"), bad: Set(), ok: true }, true)
 
   /// Driver::new(ctx, height, validator_set, address, proposer) — the
   /// per-height constructor. Its whole payload is a parameter, so replay never
   /// searches for the baseline.
   action Drivernew(proposer: Addr): bool = all {
     d' = freshDriver(proposer),
+    enteredProposer' = proposer,
+    enteredRound' = -1,
     lastOutputs' = List(),
     lastOutputCount' = 0,
     lastTags' = Set("driver_constructed"),
     validatedValues' = Set(),
     unjustifiedForwarded' = unjustifiedForwarded,
+    proposerDesynced' = proposerDesynced,
     retainedInvalid' = retainedInvalid,
     decisionRoundWrong' = decisionRoundWrong,
     silentRepropose' = silentRepropose,
@@ -897,7 +956,8 @@ module fast_driver {
       nondet ivoter = VOTERS.oneOf()
       nondet ivtype = VOTE_TYPES.oneOf()
       nondet ikind = KIND_NAMES.oneOf()
-      Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind)
+      nondet iproposer = VALIDATORS.oneOf()
+      Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind, iproposer)
     },
 
     // Arm 2 — the SAME pick names, clustered around where the driver is: the
@@ -912,7 +972,8 @@ module fast_driver {
       nondet ivoter = VALIDATORS.oneOf()
       nondet ivtype = Set("Precommit").oneOf()
       nondet ikind = Set("Propose", "Precommit").oneOf()
-      Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind)
+      nondet iproposer = Set(ME, d.proposer).oneOf()
+      Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind, iproposer)
     },
 
     // Arm 3 — the L42 arm, pure search guidance. n-f is FIVE distinct
@@ -933,11 +994,14 @@ module fast_driver {
       nondet ivoter =
         VALIDATORS.filter(a => not(hasFirstVote(d.kv, L42_ROUND, a)))
                   .union(Set(ME)).oneOf()
+      // Arm 4 used to be a bare `set_proposer(ME)`; now that the proposer
+      // travels with the round, becoming the proposer IS the NewRound here.
+      nondet iproposer = Set(ME).oneOf()
       val iround =
         if (inputTag == "Vote") L42_ROUND
         else if (inputTag == "NewRound") d.rs.round + 1
         else d.rs.round
-      Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind)
+      Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind, iproposer)
     },
 
     // Arm 3b — the QUORUM-FIRST lane. L42's two arrival orders are not equally
@@ -956,25 +1020,19 @@ module fast_driver {
       nondet ivoter =
         VALIDATORS.filter(a => not(hasFirstVote(d.kv, L42_ROUND, a)))
                   .union(Set(ME)).oneOf()
+      nondet iproposer = Set(ME).oneOf()
       val iround = L42_ROUND
-      Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind)
+      Driverprocess(inputTag, iround, ivalue, ipol, ivalidity, ivoter, ivtype, ikind, iproposer)
     },
-
-    // Arm 4 — becoming the proposer. L15-L16's re-propose path is only reached
-    // by the node that proposes the round it enters, so the walk has to pass
-    // through here for `repropose_resolved_to_a_full_proposal` to exist.
-    Driverset_proposer(ME),
 
     // The raw public operations, sharing an arm so `process` — what most
     // scenarios need — stays the likely choice.
     {
-      nondet address = VALIDATORS.oneOf()
       nondet proposer = VALIDATORS.oneOf()
       nondet pround = ROUND_BAND.oneOf()
       nondet pvalue = VALUES.oneOf()
       nondet ppol = ROUND_BAND.oneOf()
       any {
-        Driverset_proposer(address),
         FreshProposalskeep(pround, pvalue, ppol),
         FreshProposalsclear,
         Drivernew(proposer),
@@ -1023,6 +1081,10 @@ module fast_driver {
   /// Every round input derived from a keeper output is applied for the round
   /// the keeper reported it for.
   val keeper_outputs_keep_their_reported_round: bool = not(keeperRoundDrifted)
+
+  /// The proposer the driver holds is the one named by the last round it
+  /// actually entered.
+  val the_proposer_describes_the_round_we_are_in: bool = not(proposerDesynced)
 
   /// A decision is never changed once recorded.
   val a_decision_is_never_revised: bool = not(decisionRevised)
