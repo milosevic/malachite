@@ -1017,3 +1017,47 @@ repository edit, which is additive, builds clean, and leaves the 8 driver tests
 passing; property falsifiability is a separate claim that the worker can still
 settle. Open until the worker reports the mutation result. If it does not, I run
 the check myself before this component is called ready.
+
+### F-32d — analysis refined, and the fix is narrower than the finding assumed
+
+Traced every `is_proposer()` site in the fast state machine before designing a fix,
+because "derive the proposer per input round" implied a per-round proposer map and
+that turns out to be the wrong shape.
+
+| Site | Guard | Exposed to a stale `proposer`? |
+| --- | --- | --- |
+| `state_machine.rs:257` (L36 re-propose) | `this_round && is_proposer() && !awaiting_valid` | **No** — `this_round` already pins it |
+| `state_machine.rs:386` (L47 re-propose) | `this_round && awaiting_valid && is_proposer()` | **No** — same |
+| `state_machine.rs:335` (L36 while waiting) | `awaiting_valid && is_proposer()` | **Indirectly** — see below |
+| `state_machine.rs:409` (`start_round`, L6-L18) | `if !is_proposer()` early return | **Yes — this is the whole exposure** |
+
+`awaiting_valid` is only ever set inside `start_round` *after* its `is_proposer()`
+early return (`state_machine.rs:422`, `state.rs:210`), so a node holding
+`awaiting_valid` was necessarily the proposer of the round it entered. Site 335
+therefore inherits its correctness from site 409 rather than needing its own guard,
+and the two `this_round` sites were already closed by F-27a.
+
+So the finding reduces to one question: **can a round be entered without naming its
+proposer?** Today yes — `set_proposer` and `Input::NewRound(round)` are separate
+calls and nothing orders them. A node that proposed round `r-1` and does not propose
+`r` takes the proposer path in `r`; the mirror case silently misses its own proposal
+slot and the round times out.
+
+**The fix is to delete the ordering requirement, not to tolerate it.** The classic
+driver already has the answer — `Input::NewRound(Ctx::Height, Round, Ctx::Address)`
+(`core-driver/src/input.rs:15`) carries the proposer *with* the round, so the
+question cannot be asked. The fast driver becomes `NewRound(Round, Ctx::Address)`
+and `set_proposer` goes away. Cheap: `set_proposer` has **no production caller**,
+only 5 sites in `tests/fast_driver.rs`.
+
+**Held, not applied.** Studio's `fast-driver` coverage run is in flight against this
+exact file, and its just-approved instrumentation models `Driverset_proposer` as an
+independent action. Applying the fix mid-run would drift the component under its own
+measurement. The sequence is: let the run finish, apply the fix, re-review, then
+`restart_component` (no stage) to re-sync the drift — which keeps the spec and the
+approved observations.
+
+Worth noting for the exercise: Studio modelled `set_proposer` as a free-standing
+action reachable in any state, which is a faithful model of the API and is exactly
+the freedom the defect lives in. The model was right; the API was wrong.
+
