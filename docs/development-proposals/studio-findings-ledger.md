@@ -70,6 +70,8 @@ independent reviewer, not by Studio or by the tests.
 | F-38d | Nothing tested that the check is *called*; deleting both call sites passed every test | reviewer (round 9) | low | `a482a480` | next commit | **fixed structurally** |
 | F-38e | Misplaced doc comment: my insertion gave the discovery docstring to a new test | reviewer (round 9) | low | `a482a480` | next commit | **fixed** |
 | F-38f | `MALACHITE__CONSENSUS__PROTOCOL` is case-insensitive, unlike the TOML path the test documents | reviewer (round 9) | low | `a482a480` | next commit | **fixed** — docstring scoped |
+| F-39a | `corruption::truncate_on_corruption` asserted pre-rework WAL semantics and failed deterministically on this branch | me (full-suite run) | medium | branch lineage, pre-`ac4916df` | next commit | **fixed** — superseded test removed |
+| F-39b | `crashes::concurrent_crash_recovery` is flaky under parallel execution (1 failure in 5 full-suite runs, 0 in 14 isolated) | me (full-suite run) | low | pre-existing, also upstream | — | **open** — not branch-specific |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -1532,4 +1534,61 @@ validity_change_on_restart and the byzantine-proposer restart tests. Plus the re
 live run: with `protocol = "fast"` the node now exits with the configuration error and the
 home directory afterwards contains **no `wal/` directory and no WAL file**, where before
 the fix it logged `Starting network service`, `Opened WAL`, and left one behind.
+
+## F-39 — The branch had a red test, and it was not in the fast code
+
+Asked to confirm the tree compiles and passes, I ran the **full** workspace suite rather
+than the crates I had been touching. It does not pass: `cargo test --workspace` fails in
+`arc-malachitebft-wal`. Neither failure is in the Fast Tendermint work, and both are worth
+recording because the first was a real red test hiding on the branch.
+
+### F-39a — a superseded test left behind by the WAL corruption rework
+`corruption::truncate_on_corruption` failed deterministically (5 of 5 runs):
+
+```
+assertion `left == right` failed: Iterator stopped at wrong point
+  left: 5, right: 1
+```
+
+**Not mine, and not the fast work**: none of the eleven commits in this session touch
+`crates/wal`, and the test fails identically at `ac4916df`, the commit the session started
+from. But it is **branch-specific** — it *passes* at the upstream v0.8.0 sync point
+`72143f6c`, so something on the Quint/Studio lineage changed behaviour under it.
+
+What changed is deliberate. Upstream, a CRC mismatch returned `Err` and **stopped** the
+iterator. On this branch `read_to_next` was reworked to return `EntryRead`, and a mismatch
+now calls `damaged()`, which still reports `Err` for that entry but **continues to the
+next** — so corruption is still detected per entry, it just no longer truncates the scan.
+
+The rework brought its own tests: `truncation.rs` holds `truncate_on_corruption_at_0`
+through `_at_9`, ten tests over exactly the `for idx in 0..10` range the old test looped,
+with an identical `corrupt_and_truncate_at` helper differing in one line —
+`verify_wal_scan` (post-rework) instead of `verify_wal_state_pre_fix` (pre-rework). All ten
+pass. The old test was simply not deleted, and its helper's own doc comment says it
+"Verifies the WAL iterator behavior **before the fix**".
+
+**Removed**, with `corrupt_and_truncate_at`, `verify_wal_state_pre_fix`,
+`corrupt_wal_entry_crc` and `verify_wal_recovery`, which had no other caller in that file.
+`setup_valid_wal` is kept — `open_keeps_intact_entries_after_a_corrupted_length_field`
+still uses it. Verified the two files' shared helpers were byte-identical before deleting
+either copy.
+
+### F-39b — and a flaky test, which is neither mine nor branch-specific
+Removing F-39a turned up a *different* failure on the next run:
+`crashes::concurrent_crash_recovery`, `CRC mismatch`. It does not reproduce in isolation —
+**0 failures in 8 runs on this branch and 6 at upstream `72143f6c`** — and the wal suite
+then ran green four times in a row. One failure in five full-suite runs, only under
+parallel execution.
+
+Left open: a concurrency-sensitive crash-recovery test that fails ~20% of the time in a
+loaded full-suite run is a real CI hazard, but it is a pre-existing upstream property, not
+something this branch introduced, and diagnosing it is outside the Fast Tendermint scope.
+Recorded so it is not rediscovered as a mystery.
+
+### The process point
+Every status I gave in this session said the classic suites were green, and they were — I
+had been running the crates I touched (`core-*`, `config`, `app`, the `test` integration
+suite) rather than `--workspace`. That is exactly the gap a scoped test command leaves,
+and it is the same shape as the reviewer's round-9 finding that deleting a call site left
+99 tests green. **Run the whole suite before claiming the tree is clean.**
 
