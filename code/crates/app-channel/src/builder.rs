@@ -981,6 +981,11 @@ mod byzantine {
         where
             Codec: ConsensusCodec<Ctx> + SyncCodec<Ctx>,
         {
+            // This method spawns before `build()` runs, so the check there cannot cover
+            // it: without this, a node configured for a protocol it cannot run would bind
+            // a network listener and spawn two actors before anyone looked at `protocol`.
+            malachitebft_app::spawn::check_consensus_protocol(self.config.consensus())?;
+
             let span = tracing::error_span!("node", moniker = %self.config.moniker());
             let registry = SharedRegistry::global().with_moniker(self.config.moniker());
 

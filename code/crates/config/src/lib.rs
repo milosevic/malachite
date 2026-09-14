@@ -1197,6 +1197,13 @@ mod tests {
 
     /// Anything else is rejected rather than silently defaulted, so a typo like
     /// `protocol = "Fast"` cannot start a node on the protocol it did not ask for.
+    ///
+    /// This is the **file** path's guarantee. The environment override
+    /// (`MALACHITE__CONSENSUS__PROTOCOL`) goes through `config-rs`, which matches variant
+    /// names case-insensitively, so `Fast`, `FAST` and `fAsT` all select `Fast` there.
+    /// That is leniency rather than danger — it still never selects a protocol the
+    /// operator did not name, and an unknown value is still rejected outright — but the
+    /// claim below is about TOML and does not carry over.
     #[test]
     fn consensus_config_rejects_an_unknown_protocol() {
         let full = toml::to_string(&ConsensusConfig::default()).unwrap();

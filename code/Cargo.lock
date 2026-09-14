@@ -204,6 +204,7 @@ dependencies = [
  "arc-malachitebft-peer",
  "arc-malachitebft-signing",
  "arc-malachitebft-sync",
+ "arc-malachitebft-test",
  "arc-malachitebft-wal",
  "async-trait",
  "derive-where",

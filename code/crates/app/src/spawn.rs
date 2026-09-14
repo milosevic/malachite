@@ -53,12 +53,43 @@ use crate::types::ValuePayload;
 pub fn check_consensus_protocol(cfg: &ConsensusConfig) -> Result<()> {
     match cfg.protocol {
         ConsensusProtocol::Classic => Ok(()),
-        ConsensusProtocol::Fast => Err(eyre!(
-            "consensus.protocol = \"fast\" is not yet supported by this node: the Fast \
-             Tendermint driver is implemented but not wired into the consensus actor. \
-             Set consensus.protocol = \"classic\" (the default) to start."
-        )),
+        ConsensusProtocol::Fast => Err(fast_is_not_wired_in()),
     }
+}
+
+/// The consensus parameters for the protocol the operator selected.
+///
+/// **This is where the guarantee lives**, not in [`check_consensus_protocol`]. The match
+/// is exhaustive over [`ConsensusProtocol`] and only the `Classic` arm can produce a
+/// `Params`, so there is no way to build consensus parameters without having answered the
+/// protocol question — deleting the refusal stops the crate compiling rather than silently
+/// starting a classic node under `protocol = "fast"`.
+///
+/// [`check_consensus_protocol`] answers the same question earlier, before any actor is
+/// spawned. That call is a fail-fast convenience; this one cannot be skipped.
+fn consensus_params_for<Ctx>(
+    cfg: &ConsensusConfig,
+    address: Ctx::Address,
+    value_payload: ValuePayload,
+) -> Result<ConsensusParams<Ctx>>
+where
+    Ctx: Context,
+{
+    match cfg.protocol {
+        ConsensusProtocol::Classic => {
+            Ok(ConsensusParams::classic(address, value_payload, cfg.enabled))
+        }
+        ConsensusProtocol::Fast => Err(fast_is_not_wired_in()),
+    }
+}
+
+/// One message for both refusals, so they cannot drift apart.
+fn fast_is_not_wired_in() -> eyre::Report {
+    eyre!(
+        "consensus.protocol = \"fast\" is not yet supported by this node: the Fast \
+         Tendermint driver is implemented but not wired into the consensus actor. \
+         Set consensus.protocol = \"classic\" (the default) to start."
+    )
 }
 
 /// Spawn the [`Node`] supervisor.
@@ -129,8 +160,7 @@ where
     // rather than one it silently downgrades to classic — a node that quietly ran the
     // wrong protocol would disagree with its peers at the first quorum, and the operator
     // would see a stalled network rather than a configuration error.
-    check_consensus_protocol(&cfg)?;
-    let consensus_params = ConsensusParams::classic(address, value_payload, cfg.enabled);
+    let consensus_params = consensus_params_for::<Ctx>(&cfg, address, value_payload)?;
 
     Consensus::spawn(
         ctx,
@@ -322,9 +352,6 @@ mod tests {
     use malachitebft_config::DiscoveryConfig as SerdeDiscoveryConfig;
     use malachitebft_network::DiscoveryConfig as RuntimeDiscoveryConfig;
 
-    /// The serde-deserialized default in `malachitebft-config` and the runtime
-    /// default in `malachitebft-discovery` are defined independently. Pin them
-    /// so a change in one without the other is caught immediately.
     /// The classic path must keep starting exactly as it did before the field existed.
     #[test]
     fn the_default_protocol_is_accepted() {
@@ -346,6 +373,33 @@ mod tests {
         assert!(msg.contains("classic"), "the error must name the value that works: {msg}");
     }
 
+    /// The refusal that cannot be bypassed: `spawn_consensus_actor` has no other way to
+    /// obtain a `Params`, so this arm is what actually prevents a classic node starting
+    /// under `protocol = "fast"`. `check_consensus_protocol` only answers it earlier.
+    #[test]
+    fn consensus_params_cannot_be_built_for_an_unsupported_protocol() {
+        use malachitebft_test::{Address, TestContext};
+
+        let addr = Address::new([0; 20]);
+        let classic = ConsensusConfig::default();
+        assert!(
+            consensus_params_for::<TestContext>(&classic, addr, ValuePayload::ProposalOnly).is_ok(),
+            "classic must still build its params"
+        );
+
+        let fast = ConsensusConfig {
+            protocol: ConsensusProtocol::Fast,
+            ..ConsensusConfig::default()
+        };
+        let err = consensus_params_for::<TestContext>(&fast, addr, ValuePayload::ProposalOnly)
+            .map(|_| ())
+            .expect_err("fast must not yield params while the driver is unwired");
+        assert!(err.to_string().contains("not yet supported"), "got {err}");
+    }
+
+    /// The serde-deserialized default in `malachitebft-config` and the runtime
+    /// default in `malachitebft-discovery` are defined independently. Pin them
+    /// so a change in one without the other is caught immediately.
     #[test]
     fn ip_throttle_duration_default_matches_across_crates() {
         assert_eq!(

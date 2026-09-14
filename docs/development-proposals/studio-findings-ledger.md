@@ -52,7 +52,7 @@ independent reviewer, not by Studio or by the tests.
 | F-34b | Equivocating vote untested at the driver boundary | studio (fast-driver, coverage) | medium | `ac4916df` | `c796d359` | **fixed** — test adopted |
 | F-34c | Vote from a non-validator untested at the driver boundary | studio (fast-driver, coverage) | medium | `ac4916df` | `c796d359` | **fixed** — test adopted |
 | F-34d | `get_component_insights` cannot return coverage: report indexes an observation outside an empty confirmed contract | studio (tooling) | low | `ac4916df` | — | **open** — Studio-side |
-| F-35a | New public config field undocumented in `BREAKING_CHANGES.md`; semver CI likely to fail | reviewer (round 6) | medium | `59038473` | next commit | **fixed** |
+| F-35a | New public config field undocumented in `BREAKING_CHANGES.md` | reviewer (round 6) | ~~medium~~ **low** | `59038473` | `a482a480` | **fixed** — the CI half was **disproven**, see F-38a |
 | F-35b | Generated configs emit `protocol` but no reference config or doc mentions it | reviewer (round 6) | medium | `59038473` | next commit | **fixed** |
 | F-35c | The `fast` refusal fired after the network listener and WAL were already open | reviewer (round 6) | low | `59038473` | next commit | **fixed** |
 | F-35d | Nothing tested the refusal itself — the whole no-silent-downgrade guarantee was unguarded | reviewer (round 6) | low | `59038473` | next commit | **fixed** |
@@ -64,6 +64,12 @@ independent reviewer, not by Studio or by the tests.
 | F-37c | `QuorumAny` had no `decision.is_none()` guard — a decided node kept arming precommit timeouts | reviewer (round 8) | low | pre-existing | next commit | **fixed** |
 | F-37d | `NewRound(Round::Nil)` was accepted; the driver asked for a value and scheduled a timeout for round −1 | reviewer (round 8) | low | pre-existing | next commit | **fixed** |
 | F-37e | `transition.valid` is a sound but implicit proxy for "entered the round"; nothing pinned the coupling | reviewer (round 8) | low | `b7ab123b` | next commit | **fixed** — `debug_assert` |
+| F-38a | My round-6 semver-CI prediction was wrong: the job passes trivially and always would have | reviewer (round 9, disproving itself) | — | — | — | **corrected** |
+| F-38b | The `BREAKING_CHANGES` sweep missed `malachitebft-core-consensus`, which removed a public field on this branch | reviewer (round 9) | low | `bf6ac554` | next commit | **fixed** |
+| F-38c | `with_byzantine_network` spawns the network before `build()` runs the check — the bypass was real | reviewer (round 9) | low | `a482a480` | next commit | **fixed** |
+| F-38d | Nothing tested that the check is *called*; deleting both call sites passed every test | reviewer (round 9) | low | `a482a480` | next commit | **fixed structurally** |
+| F-38e | Misplaced doc comment: my insertion gave the discovery docstring to a new test | reviewer (round 9) | low | `a482a480` | next commit | **fixed** |
+| F-38f | `MALACHITE__CONSENSUS__PROTOCOL` is case-insensitive, unlike the TOML path the test documents | reviewer (round 9) | low | `a482a480` | next commit | **fixed** — docstring scoped |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -1443,4 +1449,87 @@ no timeouts".
 Both `NewRound` guards now require `round.is_defined()`.
 
 Both are pinned by tests that fail with the fixes reverted.
+
+## F-38 — Ninth review: the reviewer disproved its own prediction
+
+- **Found against:** `a482a480` · **Source:** independent reviewer, verification pass
+
+### F-38a — the semver-CI claim was wrong, and the correction matters more than the finding
+In round 6 the reviewer predicted (LIKELY) that the semver job would fail without a
+`BREAKING_CHANGES` entry, reasoning that `app` glob-re-exports `ConsensusConfig` and that
+rustdoc inlines such re-exports, so `constructible_struct_adds_field` would fire. I
+recorded that as the justification for F-35a.
+
+On the verification pass it installed `cargo-semver-checks` v0.50.0 and **ran** it:
+
+```
+Checking arc-malachitebft-app v0.7.0-pre -> v0.8.0 (major change)
+ Checked [0.000s] 0 checks: 0 pass, 254 skip
+ Summary no semver update required
+```
+
+The crates.io baseline is `0.7.0-pre` and the workspace is `0.8.0`. Under 0.x that is
+already a major bump, so **all 254 lints are skipped and the job exits 0** — for any PR on
+this branch. The lint was never going to fire.
+
+So F-35a's severity drops from medium to low and its justification changes from "CI would
+fail" to "project convention" — the 0.8.0 section documents a structurally identical
+`P2pConfig` field addition, which is reason enough to keep the entries. **Nothing has to
+happen before merge on the CI axis.** Recorded prominently because I had repeated the
+prediction to the user as a reason the change mattered.
+
+### F-38b — the sweep was incomplete
+Diffing the whole branch against the v0.8.0 sync point turned up exactly one removed public
+item: `Params::threshold_params` in `core-consensus` (from `bf6ac554`, the F-30a fix). That
+crate *is* on the semver-checks list and had no `## Unreleased` heading. **Entry added.**
+The reviewer also settled a question I had asked: a new public *function* needs no entry —
+it is a non-breaking addition — though the embedder guidance in the `app` entry is worth
+keeping.
+
+### F-38c — the bypass I asked about was real
+`with_byzantine_network` is a *builder-stage* method, so it runs before `build()` and
+therefore before the check hoisted there in F-35c. It is not passive: it spawns the real
+network actor and a proxy. So on that one path the listener was bound and two actors
+existed before anything read `protocol`. Feature-gated and test-only, hence low — but it is
+F-35c surviving on a path. **Check added at the top of that method.**
+
+### F-38d — and the fix for it is structural, not another test
+The sharpest finding: deleting **both** call sites left all 99 workspace tests green, and
+the node would silently run classic under `protocol = "fast"` — the exact failure the
+design exists to prevent. A test would only have pinned one more call site.
+
+Instead the decision moved into `consensus_params_for`, whose match over
+`ConsensusProtocol` is exhaustive and whose `Classic` arm is the only one that yields a
+`Params`. `spawn_consensus_actor` has no other way to obtain one, so **deleting the refusal
+stops the crate compiling**. Verified rather than asserted — the lesson from F-36:
+
+```
+error[E0004]: non-exhaustive patterns:
+  `arc_malachitebft_core_types::ConsensusProtocol::Fast` not covered
+```
+
+`check_consensus_protocol` remains, and remains called early, but it is now a fail-fast
+convenience rather than the guarantee.
+
+### F-38e, F-38f — both mine, both fixed
+My insertion split the discovery docstring from the test it documented, handing three lines
+about discovery defaults to `the_default_protocol_is_accepted`. And
+`MALACHITE__CONSENSUS__PROTOCOL` is case-insensitive in `config-rs` — `Fast`, `FAST`,
+`fAsT` all select `Fast` — while `consensus_config_rejects_an_unknown_protocol` claims a
+typo like `"Fast"` cannot start a node on a protocol it did not ask for. That claim is the
+*file* path's, and the docstring now says so. Leniency, not danger: an unknown value is
+still rejected outright, and it never selects a protocol the operator did not name.
+
+### And one the reviewer flagged that was already fixed
+It reported the first config test's docstring as still misleading. It had been corrected in
+`7309db75` — I sent the verification request *before* making that fix, so it read a stale
+tree. Worth noting as a coordination hazard rather than a finding.
+
+### Coexistence, strongest check to date
+`cargo test -p arc-malachitebft-test --test it` — **95 passed, 0 failed, 5 ignored** —
+covering wal, value_sync, vote_rebroadcast, vote_extensions, finalization,
+validity_change_on_restart and the byzantine-proposer restart tests. Plus the reviewer's
+live run: with `protocol = "fast"` the node now exits with the configuration error and the
+home directory afterwards contains **no `wal/` directory and no WAL file**, where before
+the fix it logged `Starting network service`, `Opened WAL`, and left one behind.
 

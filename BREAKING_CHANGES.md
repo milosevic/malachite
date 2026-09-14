@@ -7,6 +7,10 @@
 - Added a `protocol: ConsensusProtocol` field to `ConsensusConfig` (opt-in via `#[serde(default)]`, defaulting to `ConsensusProtocol::Classic`). Existing configuration files and environment overrides are unaffected and continue to select classic Tendermint. Code that constructs `ConsensusConfig` with an exhaustive struct literal must add the field or use `..Default::default()`.
 - `malachitebft-config` now depends on `malachitebft-core-types` with its `serde` feature enabled, for the `ConsensusProtocol` enum.
 
+### `malachitebft-core-consensus`
+
+- `Params` no longer has a public `threshold_params` field. The consensus protocol is now the single source for the thresholds: construct with `Params::classic` and read them through the `Params::threshold_params()` method. Storing both allowed them to disagree, and a `Fast` protocol paired with classic 2/3 thresholds would have compiled and run.
+
 ### `malachitebft-app`
 
 - Added `spawn::check_consensus_protocol`, which refuses a configuration this node cannot run. `consensus.protocol = "fast"` selects Fast Tendermint, whose driver is implemented but not yet wired into the consensus actor, so it returns an error rather than silently starting a classic node. Callers that spawn actors themselves should call it before spawning anything.
