@@ -40,7 +40,11 @@ independent reviewer, not by Studio or by the tests.
 | F-30a | A public `protocol` field let the fast-protocol panic escape into a logging statement | reviewer (round 4) | medium | `bf6ac554` | next commit | **fixed** — third instance of "method guard on a public field" |
 | F-30c | The Driver keeps its own threshold copy, outside the single source | reviewer (round 4) | low | `bf6ac554` | — | recorded; cannot diverge now |
 | F-30d | No operator-facing protocol selection; `config` lacks the dependency and the serde feature | reviewer (round 4) | medium | `bf6ac554` | — | **open** |
-| F-31 | The fast driver (L27 justification, L42 cross-round decide, L15-L16 resolution) | — | — | — | next commit | added, **not yet reviewed or modelled** |
+| F-31 | The fast driver (L27 justification, L42 cross-round decide, L15-L16 resolution) | — | — | — | `1d51e828` | added; reviewed, **not yet modelled** |
+| F-32a | An unbuildable re-proposal stalled the proposer — no proposal, no timeout, no wait | reviewer (round 5) | high | `1d51e828` | next commit | **fixed** (interim; needs the id-carrying proposal type) |
+| F-32b | An unpairable decision quorum was lost forever, and my test pinned it as intended | reviewer (round 5) | high | `1d51e828` | next commit | **fixed** |
+| F-32c | Proposals the application rejected were retained and could supply a decision | reviewer (round 5) | medium | `1d51e828` | next commit | **fixed** |
+| F-32d | One `proposer` field answers for every input round | reviewer (round 5) | medium | `1d51e828` | — | **open** |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -854,6 +858,87 @@ way. No non-test `src` file constructs `ThresholdParams` or uses the raw constan
   pruned per round — a proposal from an early round stays relevant all height, because L42
   lets the deciding quorum arrive in any later one.
 - 6 tests. **Next: independent review, then Studio**, per the working loop.
+
+## F-32 — Fifth review: the fast driver, including a test that pinned a bug as intended
+
+- **Found against:** `1d51e828` · **Fixed in:** the commit that follows · **Source:**
+  independent reviewer, fifth round
+
+### F-32a — DEFINITE/High. A re-proposal is dropped exactly when it matters
+`resolve` returned `None` when no fresh proposal was retained for the identifier, which
+`apply_round` turned into an empty output. The state machine had **already transitioned** —
+`propose_now` cleared `awaiting_valid` — so the node sat in `Propose` as proposer with no
+proposal, **no propose timeout** (the proposer path schedules none) and no `WaitForValid`.
+It stalled until some other node's `QuorumAny` happened to arm a precommit timeout.
+
+The insight I had missed: this is the **ordinary** case, not an edge case. `state.valid` is
+set from `Input::VoteQuorumForValue`, and **votes carry only `id(v)`**; it is also set from
+the L27 re-proposal arm, whose proposal `FreshProposals::keep` deliberately ignores. So a
+lagging or recovering node routinely holds `valid = (vr, id)` with no value behind it, and
+becoming proposer produced nothing at all.
+
+**Root cause is a divergence from the paper.** L15-L16 broadcasts the *identifier*; a
+correct proposer never needs the value. This driver reconstructs a full-value proposal,
+which both changes the wire format and creates the hole. Closing it properly needs the
+value-or-id proposal type the plan already calls for (Stage 0 finding 5). **Interim fix:**
+schedule the propose timeout instead of emitting nothing, so the round ends, everyone votes
+nil, and the height progresses. Documented at the site as a known divergence.
+
+### F-32b — DEFINITE/High. An unpairable decision quorum was lost forever
+I suspected this and asked; the reviewer confirmed it. The `continue` was not a deferral but
+a drop: the keeper latches `decision_quorum` per `(round, value)` and **never re-emits**,
+and `apply_proposal` never re-checked. L42 is a symmetric `upon` — both conjuncts persist
+and whichever arrives second fires it — but the code only evaluated it on the vote edge.
+Votes-before-value is the normal ordering for a lagging node, since votes are small and
+sync delivers certificates ahead of payloads.
+
+**Fixed:** `apply_proposal` now re-evaluates L42 after retaining. That needed a keeper query
+that did not exist — `has_decision_quorum` requires a round, and a caller holding a proposal
+has none — so `decision_quorum_round(value_id) -> Option<Round>` was added.
+
+**And my test pinned the bug as intended behaviour.** `a_quorum_without_its_proposal_decides_nothing`
+asserted only the first half of the rule. It is now
+`a_quorum_that_arrives_before_its_proposal_still_decides`, which asserts both. A test that
+enshrines a defect is worse than no test, and this one was written by the same hand that
+wrote the defect.
+
+### F-32c — DEFINITE/Medium. Proposals the application rejected were retained
+`keep` ran before the validity branch, so an invalid proposal could later supply the value
+for a decision. My comment justified it with "even a proposal we vote nil on may supply the
+value" — which conflates two different nil votes: nil because L21's binding clause forbids
+the value (**keep**), and nil because `validate(v)` failed (**must not keep**). The classic
+driver already gates on this. Malachite lets applications define validity and does not
+guarantee determinism, so this is the safety-relevant direction. **Fixed.**
+
+### F-32d — LIKELY/Medium. One `proposer` field answers for every input round
+`Info` is built with `self.proposer` for all inputs, but that field means "proposer of the
+round being entered", and nothing enforces that `set_proposer` is called before each
+`NewRound`. Since F-27a, `VoteQuorumForValue` legitimately accepts quorums for rounds
+*below* the current one, so a stale proposer makes `Repropose` emittable for a round we do
+not propose. The reviewer checked the other half and cleared it: **no path inside the state
+machine emits `Repropose` without `is_proposer()`**, so the exposure is entirely the
+driver's bookkeeping. **Open** — the fix is to derive the proposer per input round.
+
+### Cleared by the same review
+- The round cannot move between the state machine deciding to re-propose and the driver
+  resolving it: `resolve` runs immediately after the state is stored, and none of the three
+  `Repropose` paths change the round.
+- The `mem::replace` dummy state is never observable — `apply` is total, with no panic or
+  unwrap on any arm, and nothing between the replace and the restore can return early.
+- Batch ordering L36 → L42 → L39 is right, and no earlier output misapplies a later one.
+  One cosmetic consequence: after a decision, the batch still emits a precommit
+  `ScheduleTimeout`. Harmless, since the timeout arm requires `decision.is_none()`.
+
+### And the pattern did NOT recur
+I asked the reviewer to call out loudly any fourth instance of "a method guard on a public
+field". There is none here: every `Driver` field and `FreshProposals::by_id` is private, and
+the only mutating entry points are `process` and `set_proposer`. **The first of the four
+modules where the encapsulation is right by construction rather than by convention.**
+
+### Still open from this round
+`FreshProposals` growth is bounded only by distinct values proposed in a height, and `keep`
+runs before any proposer check, so any peer reaching the driver can grow it — the same class
+as F-01, and it deserves the same verdict.
 
 ---
 

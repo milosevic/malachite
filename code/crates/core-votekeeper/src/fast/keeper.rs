@@ -355,6 +355,19 @@ impl<Ctx: Context> FastVoteKeeper<Ctx> {
             .is_some_and(|r| r.decision_quorum.contains(value_id))
     }
 
+    /// The round in which `value_id` reached the decision quorum, if any has.
+    ///
+    /// L42 pairs a fresh proposal with `n - f` votes and lets the two rounds differ, so a
+    /// caller holding a proposal has no round to ask about — it needs to know whether ANY
+    /// round decided this value. Answers from the reached-threshold record, so it still
+    /// answers after `prune_votes`.
+    pub fn decision_quorum_round(&self, value_id: &ValueId<Ctx>) -> Option<Round> {
+        self.reached
+            .iter()
+            .find(|(_, reached)| reached.decision_quorum.contains(value_id))
+            .map(|(round, _)| *round)
+    }
+
     /// Drop the per-round vote tallies below `min_round`.
     ///
     /// Three things are deliberately NOT pruned:

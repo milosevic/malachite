@@ -145,9 +145,16 @@ impl<Ctx: Context> Driver<Ctx> {
         let value_id = proposal.value().id();
         let pol_round = proposal.pol_round();
 
-        // Keep it before routing: even a proposal we vote nil on may be the one that
-        // supplies the value for a decision several rounds later (L42).
-        self.proposals.keep(proposal.clone());
+        // Only a proposal the application accepted may be retained. An earlier version
+        // kept every proposal, reasoning that one we vote nil on might still supply the
+        // value for a later decision — which conflates two different nil votes. Voting nil
+        // because L21's binding clause forbids the value is a reason to KEEP it; voting
+        // nil because `validate(v)` failed is not, and retaining it would let an invalid
+        // value be decided at L42. Malachite lets applications define validity and does
+        // not guarantee it is deterministic, so this is the safety-relevant direction.
+        if validity.is_valid() {
+            self.proposals.keep(proposal.clone());
+        }
 
         let input = if pol_round.is_nil() {
             // L20: a fresh proposal.
@@ -168,7 +175,26 @@ impl<Ctx: Context> Driver<Ctx> {
             }
         };
 
-        self.apply_round(input, round)
+        let mut outputs = self.apply_round(input, round);
+
+        // L42 is a symmetric `upon`: both conjuncts persist and whichever arrives SECOND
+        // fires it. Evaluating it only on the vote edge lost the decision whenever the
+        // quorum arrived first — the keeper latches each threshold once and never
+        // re-reports it, so nothing would have fired again. Votes-before-value is the
+        // normal ordering for a lagging node, since votes are small and sync delivers
+        // certificates ahead of payloads.
+        if validity.is_valid() && self.round_state.decision().is_none() {
+            if let Some(quorum_round) = self.vote_keeper.decision_quorum_round(&value_id) {
+                if let Some(retained) = self.proposals.get(&value_id).cloned() {
+                    outputs.extend(self.apply_round(
+                        RoundInput::ProposalAndDecisionQuorum(retained),
+                        quorum_round,
+                    ));
+                }
+            }
+        }
+
+        outputs
     }
 
     /// Feed a vote to the keeper and turn each threshold it reports into a round input.
@@ -246,16 +272,34 @@ impl<Ctx: Context> Driver<Ctx> {
             RoundOutput::Repropose {
                 value_id,
                 valid_round,
-            } => {
-                let original = self.proposals.get(&value_id)?;
-                Output::Proposal(self.ctx.new_proposal(
+            } => match self.proposals.get(&value_id) {
+                Some(original) => Output::Proposal(self.ctx.new_proposal(
                     self.round_state.height(),
                     self.round_state.round(),
                     original.value().clone(),
                     valid_round,
                     self.address.clone(),
-                ))
-            }
+                )),
+
+                // We hold an identifier valid but never saw the fresh proposal that
+                // carried its value. This is ORDINARY, not exotic: `valid` is set from
+                // vote quorums, and votes carry only `id(v)`.
+                //
+                // The paper has no such problem — L15-L16 broadcasts the identifier, and a
+                // proposer never needs the value. Reconstructing a full-value proposal is
+                // this driver's divergence, and closing it properly needs the
+                // value-or-id proposal type the plan already calls for.
+                //
+                // Until then: schedule the propose timeout rather than emitting nothing.
+                // Emitting nothing left the node in `Propose` as proposer with no
+                // proposal, no timeout and no wait — stalled until some other node's
+                // quorum happened to arm one. With the timeout, the round ends, everyone
+                // votes nil, and the height makes progress.
+                None => Output::ScheduleTimeout(Timeout {
+                    round: self.round_state.round(),
+                    kind: TimeoutKind::Propose,
+                }),
+            },
         })
     }
 }

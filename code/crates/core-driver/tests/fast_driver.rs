@@ -132,22 +132,90 @@ fn a_decision_pairs_a_quorum_with_a_proposal_from_an_earlier_round() {
     assert_eq!(d.decision().map(|(_, v)| v.clone()), Some(Value::new(7)));
 }
 
-/// A quorum with no retained proposal decides nothing: the votes carry an identifier, and
-/// only the fresh proposal carries the value. The quorum waits rather than inventing one.
+/// L42 is a symmetric `upon`: both conjuncts persist and whichever arrives SECOND fires
+/// it. A quorum arriving before its proposal must not be lost.
+///
+/// An earlier version of this test asserted only the first half — that the quorum decides
+/// nothing — and so pinned a liveness bug as intended behaviour. The keeper latches each
+/// threshold once and never re-reports it, so the decision was gone for good. Votes before
+/// value is the NORMAL ordering for a lagging node: votes are small, values are large, and
+/// sync delivers certificates ahead of payloads.
 #[test]
-fn a_quorum_without_its_proposal_decides_nothing() {
+fn a_quorum_that_arrives_before_its_proposal_still_decides() {
     let (a, mut d) = driver_with(false);
     d.process(Input::NewRound(Round::new(0)));
+
+    // The quorum lands first. Nothing supplies the value yet, so nothing decides.
+    for i in 0..5 {
+        for out in d.process(Input::Vote(vote(0, 7, a[i]))) {
+            assert!(
+                !matches!(out, Output::Decision(..)),
+                "no value is available yet, so nothing may be decided"
+            );
+        }
+    }
+    assert!(d.decision().is_none(), "not yet");
+
+    // The proposal arrives afterwards and completes the rule.
+    let out = d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Valid));
+    assert!(
+        out.iter().any(|o| matches!(o, Output::Decision(..))),
+        "the second conjunct fires the rule, got {out:?}"
+    );
+    assert_eq!(d.decision().map(|(_, v)| v.clone()), Some(Value::new(7)));
+}
+
+/// Only a proposal the application ACCEPTED may supply a value for a decision. Retaining
+/// one it rejected would let an invalid value be decided at L42.
+#[test]
+fn an_invalid_proposal_never_supplies_a_decision() {
+    let (a, mut d) = driver_with(false);
+    d.process(Input::NewRound(Round::new(0)));
+
+    d.process(Input::Proposal(fresh(0, 7, a[1]), Validity::Invalid));
 
     for i in 0..5 {
         for out in d.process(Input::Vote(vote(0, 7, a[i]))) {
             assert!(
                 !matches!(out, Output::Decision(..)),
-                "nothing supplies the value, so nothing may be decided"
+                "the only proposal for this value was rejected by the application"
             );
         }
     }
     assert!(d.decision().is_none());
+}
+
+/// A proposer that holds an identifier valid but never saw the fresh proposal carrying its
+/// value cannot build the re-proposal. That is ORDINARY — `valid` is set from vote
+/// quorums, and votes carry only `id(v)`.
+///
+/// It must not stall: emitting nothing left the node in Propose as proposer with no
+/// proposal, no timeout and no wait, until some other node's quorum happened to arm one.
+#[test]
+fn a_proposer_that_cannot_build_its_reproposal_still_schedules_a_timeout() {
+    let (a, mut d) = driver_with(false);
+    d.process(Input::NewRound(Round::new(0)));
+
+    // 2f+1 votes make the value valid. No proposal for it was ever seen.
+    for i in 0..3 {
+        d.process(Input::Vote(vote(0, 7, a[i])));
+    }
+
+    // We propose round 1, holding (0, id(7)) valid with no value behind it.
+    d.set_proposer(a[0]);
+    let out = d.process(Input::NewRound(Round::new(1)));
+
+    assert!(
+        out.iter().any(|o| matches!(
+            o,
+            Output::ScheduleTimeout(t) if t.kind == TimeoutKind::Propose
+        )),
+        "the round must still be able to end, got {out:?}"
+    );
+    assert!(
+        !out.iter().any(|o| matches!(o, Output::Proposal(_))),
+        "and no proposal may be invented"
+    );
 }
 
 // ------------------------------------------------------------------ L15-L16

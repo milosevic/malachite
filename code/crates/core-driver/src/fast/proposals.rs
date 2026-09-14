@@ -3,7 +3,7 @@
 use alloc::collections::BTreeMap;
 
 use derive_where::derive_where;
-use malachitebft_core_types::{Context, Proposal, Round, Value, ValueId};
+use malachitebft_core_types::{Context, Proposal, Value, ValueId};
 
 /// The fresh proposals seen this height, keyed by the identifier they carry.
 ///
@@ -75,10 +75,5 @@ impl<Ctx: Context> FreshProposals<Ctx> {
     /// of rounds.
     pub fn clear(&mut self) {
         self.by_id.clear();
-    }
-
-    /// The round of the retained fresh proposal for `value_id`.
-    pub fn round_of(&self, value_id: &ValueId<Ctx>) -> Option<Round> {
-        self.by_id.get(value_id).map(|p| p.round())
     }
 }
