@@ -27,6 +27,35 @@ use crate::metrics::{Metrics, SharedRegistry};
 use crate::types::core::{ConsensusProtocol, Context};
 use crate::types::ValuePayload;
 
+/// Whether this node can run the protocol the operator selected.
+///
+/// `ConsensusParams::classic` is still the only constructor, because the consensus actor
+/// drives the classic round state machine and vote keeper; the fast driver exists
+/// (`core-driver/src/fast/`) but is not wired into that actor yet. So `fast` is a
+/// configuration the node understands and **refuses**, rather than one it silently
+/// downgrades to classic — a node that quietly ran the wrong protocol would disagree with
+/// its peers at the first quorum, and the operator would be left diagnosing a stalled
+/// network instead of reading a configuration error.
+///
+/// Depends only on the configuration file, so callers should run it **before spawning any
+/// actor**: there is no reason to open a WAL or a network listener for a node that cannot
+/// start. [`spawn_consensus_actor`] calls it too, for embedders that bypass the builder.
+///
+/// TODO: the protocol is a per-node field for a property that is network-wide and fixed at
+/// genesis — nothing here cross-validates it against the rest of the validator set. That is
+/// unreachable while `fast` refuses to boot; whatever wires the fast driver into the
+/// consensus actor must remove that refusal and add the check in the same change.
+pub fn check_consensus_protocol(cfg: &ConsensusConfig) -> Result<()> {
+    match cfg.protocol {
+        ConsensusProtocol::Classic => Ok(()),
+        ConsensusProtocol::Fast => Err(eyre!(
+            "consensus.protocol = \"fast\" is not yet supported by this node: the Fast \
+             Tendermint driver is implemented but not wired into the consensus actor. \
+             Set consensus.protocol = \"classic\" (the default) to start."
+        )),
+    }
+}
+
 /// Spawn the [`Node`] supervisor.
 ///
 /// Spawned **first**, before any children, so its [`NodeRef`] can be threaded
@@ -95,18 +124,8 @@ where
     // rather than one it silently downgrades to classic — a node that quietly ran the
     // wrong protocol would disagree with its peers at the first quorum, and the operator
     // would see a stalled network rather than a configuration error.
-    let consensus_params = match cfg.protocol {
-        ConsensusProtocol::Classic => {
-            ConsensusParams::classic(address, value_payload, cfg.enabled)
-        }
-        ConsensusProtocol::Fast => {
-            return Err(eyre!(
-                "consensus.protocol = \"fast\" is not yet supported by this node: the Fast \
-                 Tendermint driver is implemented but not wired into the consensus actor. \
-                 Set consensus.protocol = \"classic\" (the default) to start."
-            ))
-        }
-    };
+    check_consensus_protocol(&cfg)?;
+    let consensus_params = ConsensusParams::classic(address, value_payload, cfg.enabled);
 
     Consensus::spawn(
         ctx,
@@ -293,12 +312,35 @@ fn make_network_config(cfg: &ConsensusConfig, value_sync_cfg: &ValueSyncConfig) 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::ConsensusConfig;
     use malachitebft_config::DiscoveryConfig as SerdeDiscoveryConfig;
     use malachitebft_network::DiscoveryConfig as RuntimeDiscoveryConfig;
 
     /// The serde-deserialized default in `malachitebft-config` and the runtime
     /// default in `malachitebft-discovery` are defined independently. Pin them
     /// so a change in one without the other is caught immediately.
+    /// The classic path must keep starting exactly as it did before the field existed.
+    #[test]
+    fn the_default_protocol_is_accepted() {
+        assert!(check_consensus_protocol(&ConsensusConfig::default()).is_ok());
+    }
+
+    /// The whole "no silent downgrade" guarantee is this one refusal, so it is pinned
+    /// rather than left to the match arm.
+    #[test]
+    fn the_fast_protocol_is_refused_rather_than_downgraded() {
+        let cfg = ConsensusConfig {
+            protocol: ConsensusProtocol::Fast,
+            ..ConsensusConfig::default()
+        };
+        let err = check_consensus_protocol(&cfg)
+            .expect_err("fast must not be accepted while the driver is unwired");
+        let msg = err.to_string();
+        assert!(msg.contains("not yet supported"), "got {msg}");
+        assert!(msg.contains("classic"), "the error must name the value that works: {msg}");
+    }
+
     #[test]
     fn ip_throttle_duration_default_matches_across_crates() {
         assert_eq!(

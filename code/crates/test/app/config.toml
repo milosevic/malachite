@@ -28,6 +28,27 @@ log_format = "plaintext"
 #######################################################
 [consensus]
 
+# Which consensus protocol this node runs: "classic" or "fast".
+#
+# "classic" is Tendermint as Malachite has always run it: tolerates f < n/3 and
+# decides in three communication steps. This is the default, and leaving this
+# key out entirely selects it, so existing configuration files are unaffected.
+#
+# "fast" is Fast Tendermint (Vander Vos & Cason, arXiv:2608.13434): tolerates
+# f < n/5 and decides in two communication steps, buying a step at the cost of a
+# much larger validator set for the same fault tolerance - six validators to
+# tolerate one, eleven to tolerate two.
+#
+# The two are NOT interoperable, so every validator in a set must be configured
+# the same way; this is a genesis-time decision for the whole network, not a
+# per-node one, and nothing here cross-validates it.
+#
+# NOTE: "fast" is not yet runnable. The driver is implemented but not wired into
+# the consensus actor, so a node configured with it refuses to start rather than
+# silently falling back to classic.
+# Override with MALACHITE__CONSENSUS__PROTOCOL env variable
+protocol = "classic"
+
 # Enable consensus protocol participation
 # When disabled, the node will only run synchronization protocol 
 # and will not subscribe to consensus-related topics

@@ -39,7 +39,7 @@ independent reviewer, not by Studio or by the tests.
 | F-29d | `saturating_mul` reported a malformed set as an intolerance verdict | reviewer (round 3) | low | `26553e1a` | `073ed7e0` | **fixed** |
 | F-30a | A public `protocol` field let the fast-protocol panic escape into a logging statement | reviewer (round 4) | medium | `bf6ac554` | next commit | **fixed** — third instance of "method guard on a public field" |
 | F-30c | The Driver keeps its own threshold copy, outside the single source | reviewer (round 4) | low | `bf6ac554` | — | recorded; cannot diverge now |
-| F-30d | No operator-facing protocol selection; `config` lacks the dependency and the serde feature | reviewer (round 4) | medium | `bf6ac554` | — | **open** |
+| F-30d | No operator-facing protocol selection; `config` lacks the dependency and the serde feature | reviewer (round 4) | medium | `bf6ac554` | next commit | **fixed** |
 | F-31 | The fast driver (L27 justification, L42 cross-round decide, L15-L16 resolution) | — | — | — | `1d51e828` | added; reviewed, **not yet modelled** |
 | F-32a | An unbuildable re-proposal stalled the proposer — no proposal, no timeout, no wait | reviewer (round 5) | high | `1d51e828` | next commit | **fixed** (interim; needs the id-carrying proposal type) |
 | F-32b | An unpairable decision quorum was lost forever, and my test pinned it as intended | reviewer (round 5) | high | `1d51e828` | next commit | **fixed** |
@@ -52,6 +52,10 @@ independent reviewer, not by Studio or by the tests.
 | F-34b | Equivocating vote untested at the driver boundary | studio (fast-driver, coverage) | medium | `ac4916df` | `c796d359` | **fixed** — test adopted |
 | F-34c | Vote from a non-validator untested at the driver boundary | studio (fast-driver, coverage) | medium | `ac4916df` | `c796d359` | **fixed** — test adopted |
 | F-34d | `get_component_insights` cannot return coverage: report indexes an observation outside an empty confirmed contract | studio (tooling) | low | `ac4916df` | — | **open** — Studio-side |
+| F-35a | New public config field undocumented in `BREAKING_CHANGES.md`; semver CI likely to fail | reviewer (round 6) | medium | `59038473` | next commit | **fixed** |
+| F-35b | Generated configs emit `protocol` but no reference config or doc mentions it | reviewer (round 6) | medium | `59038473` | next commit | **fixed** |
+| F-35c | The `fast` refusal fired after the network listener and WAL were already open | reviewer (round 6) | low | `59038473` | next commit | **fixed** |
+| F-35d | Nothing tested the refusal itself — the whole no-silent-downgrade guarantee was unguarded | reviewer (round 6) | low | `59038473` | next commit | **fixed** |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -1175,4 +1179,76 @@ correct. Reading the spec showed the property was structurally incapable of fail
 For a model-level invariant, the falsifiability question has to be asked of the model,
 not of the implementation — which is the same lesson as [F-34a], one level up: there
 the generated *test* could not fail; here the generated *property* cannot.
+
+## F-35 — Sixth review: the operator-facing protocol selection (F-30d)
+
+- **Found against:** `59038473` · **Fixed in:** the commit that follows · **Source:**
+  independent reviewer, sixth round
+
+The reviewer verified by *running* things rather than reading them — workspace check,
+config tests, real testnet generation, a live node start with `protocol = "fast"`, and the
+classic `n3f0` suite. Four findings, all real, all fixed.
+
+### F-35a — DEFINITE/Medium. No breaking-change entry, and CI would likely have caught it
+`BREAKING_CHANGES.md`'s `## Unreleased` section was empty. The 0.8.0 section documents a
+structurally identical change (a `#[serde(default)]` field added to `P2pConfig`), so the
+project treats this shape as a documented break. `ConsensusConfig` has all-public fields
+and no `#[non_exhaustive]`, so any downstream exhaustive struct literal breaks.
+
+The CI half the reviewer flagged as LIKELY: `semver.yml` checks `arc-malachitebft-app`,
+and `app/src/config.rs` is `pub use malachitebft_config::*;`. Rustdoc inlines cross-crate
+glob re-exports, so `ConsensusConfig` appears in app's rustdoc JSON, which is what
+`constructible_struct_adds_field` keys on. **Entries added for both crates.**
+
+### F-35b — DEFINITE/Medium. The option existed but was invisible
+`crates/test/app/config.toml` is the reference config — not decorative, it is
+`include_str!`'d and parsed by a test. It gained no `protocol` entry, while generated
+configs *did* start emitting `protocol = "classic"`. An operator would find a key in their
+generated config documented nowhere, with nothing saying that `"fast"` refuses to boot.
+Against the coexistence constraint, "which value keeps my existing behaviour" is precisely
+what has to be written down. **Documented, with the env override and the not-yet-runnable
+warning.**
+
+### F-35c — DEFINITE/Low. The refusal came too late to prevent side effects
+With `protocol = "fast"` the node logged `Starting network service`, then `Opened WAL`, and
+only then errored: the check sat in `spawn_consensus_actor`, by which point the builder had
+already spawned the network, WAL, host and node actors. Harmless for the CLI, an actor leak
+plus a stray WAL file for a library embedder.
+
+**Fixed by hoisting the decision into `check_consensus_protocol`,** called at the top of
+`Builder::build` before `spawn_node_actor` — and still called inside
+`spawn_consensus_actor` for embedders that bypass the builder. A value knowable from the
+TOML alone should never open a file descriptor.
+
+### F-35d — DEFINITE/Low. The guarantee rested on an unguarded match arm
+The entire "no silent downgrade" argument was one `match` arm with no test. The three tests
+I had written covered *parsing* only. Hoisting the check made it testable without an actor
+system: `the_fast_protocol_is_refused_rather_than_downgraded` and
+`the_default_protocol_is_accepted` now pin both directions.
+
+### The reviewer cleared four areas, and disproved one worry
+- **Backward compatibility:** no `deny_unknown_fields` anywhere; both `ConsensusConfig`
+  literal sites already use `..Default::default()`; the checked-in reference config still
+  parses; `MALACHITE__CONSENSUS__PROTOCOL` works with no plumbing.
+- **TOML field order** — the thing I was most worried about, since a bare key after a table
+  header belongs to that table. Checked against real generated output, not reasoned about:
+  `toml` emits scalars before sub-tables regardless, so first position is the *safe*
+  position. Not a problem.
+- **Feature unification:** `core-types` is `no_std` but its optional serde is declared
+  `default-features = false`, so enabling it cannot drag in std; every `cfg(feature =
+  "serde")` site is a bare derive. And `crates/test` already enabled the same feature, so
+  unification was happening across most of the workspace already.
+- **Test vacuity:** the reviewer actively tried to break my "rejects unknown protocol" test
+  and could not — the document shape is held constant and only the enum value varies, so
+  `is_err()` can only come from variant rejection. One fair correction, though: the first
+  test's docstring claimed it reproduces "the shape of every configuration file written
+  before the field existed", which **overstates it** — it round-trips the *current* struct
+  minus one line. The real historical-file guard is `parse_default_config_file`.
+
+### And a design note that is not a defect yet
+`protocol` is a per-node field for a property that is network-wide and genesis-fixed, with
+no cross-validation. Unreachable while `fast` refuses to boot — but the moment the fast
+driver is wired into the consensus actor, the refusal disappears and this becomes the live
+failure mode. **A TODO now sits on `check_consensus_protocol`**, the function that must be
+changed to wire it up, so the two cannot be separated.
 

@@ -749,6 +749,11 @@ where
         let ctx = self.ctx;
         let config = self.config;
 
+        // Refuse a protocol this node cannot run BEFORE spawning anything. It depends
+        // only on the configuration file, so failing here avoids opening a WAL and a
+        // network listener for a node that is about to error out.
+        malachitebft_app::spawn::check_consensus_protocol(config.consensus())?;
+
         // Set up metrics
         let registry = SharedRegistry::global().with_moniker(config.moniker());
         let metrics = Metrics::register(&registry);

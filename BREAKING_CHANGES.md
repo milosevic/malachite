@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### `malachitebft-config`
+
+- Added a `protocol: ConsensusProtocol` field to `ConsensusConfig` (opt-in via `#[serde(default)]`, defaulting to `ConsensusProtocol::Classic`). Existing configuration files and environment overrides are unaffected and continue to select classic Tendermint. Code that constructs `ConsensusConfig` with an exhaustive struct literal must add the field or use `..Default::default()`.
+- `malachitebft-config` now depends on `malachitebft-core-types` with its `serde` feature enabled, for the `ConsensusProtocol` enum.
+
+### `malachitebft-app`
+
+- Added `spawn::check_consensus_protocol`, which refuses a configuration this node cannot run. `consensus.protocol = "fast"` selects Fast Tendermint, whose driver is implemented but not yet wired into the consensus actor, so it returns an error rather than silently starting a classic node. Callers that spawn actors themselves should call it before spawning anything.
+
 ## 0.8.0
 
 *August 27th, 2026*
