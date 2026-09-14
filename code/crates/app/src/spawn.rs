@@ -88,12 +88,11 @@ where
         config::ValuePayload::ProposalAndParts => ValuePayload::ProposalAndParts,
     };
 
-    let consensus_params = ConsensusParams {
-        address,
-        protocol: Default::default(),
-        value_payload,
-        enabled: cfg.enabled,
-    };
+    // Classic Tendermint. Nothing operator-facing can select the fast protocol yet:
+    // `crates/config` has no dependency on core-types and its `serde` feature is not
+    // enabled in the workspace, so a TOML field for it cannot exist until both are added.
+    // Recorded in the ledger rather than half-wired here.
+    let consensus_params = ConsensusParams::classic(address, value_payload, cfg.enabled);
 
     Consensus::spawn(
         ctx,

@@ -1,32 +1,32 @@
-//! Selecting a consensus protocol, and what the classic path does with a fast one.
+//! Selecting a consensus protocol, and why the classic path cannot hold one it does not
+//! implement.
 
 use arc_malachitebft_core_consensus::{Params, ThresholdParams};
 use malachitebft_core_types::{ConsensusProtocol, ValuePayload};
 use malachitebft_test::{Address, PrivateKey, TestContext};
 
-fn params(protocol: ConsensusProtocol) -> Params<TestContext> {
-    Params {
-        address: Address::from_public_key(&PrivateKey::from([1u8; 32]).public_key()),
-        protocol,
-        value_payload: ValuePayload::ProposalAndParts,
-        enabled: true,
-    }
+fn classic() -> Params<TestContext> {
+    Params::<TestContext>::classic(
+        Address::from_public_key(&PrivateKey::from([1u8; 32]).public_key()),
+        ValuePayload::ProposalAndParts,
+        true,
+    )
 }
 
-/// Classic is the default, so an existing deployment that says nothing keeps its protocol
-/// and its thresholds.
+/// Classic is what this path runs, so an existing deployment keeps its protocol and its
+/// thresholds.
 #[test]
-fn the_default_protocol_is_classic_with_classic_thresholds() {
-    let p = params(ConsensusProtocol::default());
-    assert_eq!(p.protocol, ConsensusProtocol::Classic);
+fn the_classic_constructor_yields_classic_thresholds() {
+    let p = classic();
+    assert_eq!(p.protocol(), ConsensusProtocol::Classic);
     assert_eq!(p.threshold_params(), ThresholdParams::default());
 }
 
-/// The thresholds are DERIVED from the protocol, never stored beside it. This is what
-/// makes it impossible to configure a fast node that runs on classic quorums.
+/// The thresholds are DERIVED from the protocol, never stored beside it. That is what
+/// makes it impossible to configure a fast node running on classic quorums.
 #[test]
 fn thresholds_are_derived_from_the_protocol() {
-    let p = params(ConsensusProtocol::Classic);
+    let p = classic();
     assert_eq!(p.threshold_params().quorum, ConsensusProtocol::Classic.quorum());
     assert_eq!(
         p.threshold_params().honest,
@@ -34,11 +34,29 @@ fn thresholds_are_derived_from_the_protocol() {
     );
 }
 
-/// Selecting the fast protocol and running it through the CLASSIC consensus path fails
-/// loudly rather than silently using classic thresholds. The fast driver does not exist
-/// yet; when it does, the selection happens above this call rather than here.
+/// The protocol field is PRIVATE and `classic` is the only constructor, so no caller can
+/// put a protocol into this type that the classic consensus path does not implement — not
+/// at construction and not afterwards.
+///
+/// This replaced an `expect` that was safe only by convention: while the field was public,
+/// `state.params.protocol = Fast` after construction was legal, and the next
+/// `threshold_params()` would abort inside a handler — or inside the `info!` block that
+/// logs the required voting power.
+///
+/// The compile-fail case is the point of this test and cannot be asserted at runtime:
+///
+/// ```compile_fail
+/// # use arc_malachitebft_core_consensus::Params;
+/// # use malachitebft_core_types::ConsensusProtocol;
+/// # use malachitebft_test::TestContext;
+/// # fn f(p: &mut Params<TestContext>) {
+/// p.protocol = ConsensusProtocol::Fast; // private field
+/// # }
+/// ```
 #[test]
-#[should_panic(expected = "the fast protocol has no classic thresholds")]
-fn a_fast_protocol_cannot_borrow_classic_thresholds() {
-    let _ = params(ConsensusProtocol::Fast).threshold_params();
+fn the_protocol_cannot_be_changed_after_construction() {
+    let p = classic();
+    assert_eq!(p.protocol(), ConsensusProtocol::Classic);
+    // `threshold_params` is total rather than fallible precisely because of that.
+    let _: ThresholdParams = p.threshold_params();
 }

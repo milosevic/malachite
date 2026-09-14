@@ -88,12 +88,7 @@ fn make_state(
         TestContext::new(),
         Height::new(1),
         vs,
-        Params {
-            address: my_addr,
-            protocol: Default::default(),
-            value_payload: payload,
-            enabled: true,
-        },
+        Params::classic(my_addr, payload, true),
         1000,
         1000,
     )

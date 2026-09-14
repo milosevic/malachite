@@ -36,7 +36,11 @@ independent reviewer, not by Studio or by the tests.
 | F-29a | My fault-budget check rejected `[2,3,2]` and every n<=3 set — would have **broken the classic path** | reviewer (round 3) | critical | `26553e1a` | next commit | **fixed** (now advisory) |
 | F-29b | My doc comment's justifying example was false and its test never exercised it | reviewer (round 3) | medium | `26553e1a` | next commit | **fixed** |
 | F-29c | Three uncross-checked copies of the same threshold fractions | reviewer (round 3) | medium | `26553e1a` | next commit | **fixed** |
-| F-29d | `saturating_mul` reported a malformed set as an intolerance verdict | reviewer (round 3) | low | `26553e1a` | next commit | **fixed** |
+| F-29d | `saturating_mul` reported a malformed set as an intolerance verdict | reviewer (round 3) | low | `26553e1a` | `073ed7e0` | **fixed** |
+| F-30a | A public `protocol` field let the fast-protocol panic escape into a logging statement | reviewer (round 4) | medium | `bf6ac554` | next commit | **fixed** — third instance of "method guard on a public field" |
+| F-30c | The Driver keeps its own threshold copy, outside the single source | reviewer (round 4) | low | `bf6ac554` | — | recorded; cannot diverge now |
+| F-30d | No operator-facing protocol selection; `config` lacks the dependency and the serde feature | reviewer (round 4) | medium | `bf6ac554` | — | **open** |
+| F-31 | The fast driver (L27 justification, L42 cross-round decide, L15-L16 resolution) | — | — | — | next commit | added, **not yet reviewed or modelled** |
 | F-20 | Propose timeout re-armed; suppression branch dead code | Studio (reachability) | medium | `85d486e2` | `e600629e` | **fixed** |
 | F-22e | Vote keeper tallied **prevotes** toward `2f+1`/`n-f` | reviewer | medium | `99c8468c` | `7dbe76b6` | **fixed** |
 | F-11 | Fast state machine draft never re-proposed | compiler | medium | draft | `e6e07b6f` | **fixed** |
@@ -778,6 +782,78 @@ correct because `f < n/d` is strict.
   closing the item.
 - `NoFaultTolerance` has no `Display`/`Error` impl; `ConsensusProtocol` has no
   `Display`/`FromStr`, so config parsing depends on the optional `serde` feature.
+
+## F-30 — Fourth review: the construction-time guarantee was only a convention
+
+- **Found against:** `bf6ac554` · **Fixed in:** the commit that follows · **Source:**
+  independent reviewer, fourth round
+- I threaded `ConsensusProtocol` into `Params` taking the reviewer's own recommended shape
+  — protocol as the single stored source, thresholds derived — and claimed the fast case
+  could only fail at startup. It could not.
+
+### F-30a — DEFINITE. The panic escaped construction, into a logging statement
+`State.params` is `pub` and `Params.protocol` was `pub`, so
+`state.params.protocol = ConsensusProtocol::Fast` after `State::new` is legal safe Rust.
+The next `threshold_params()` then aborts **inside a handler** — `decide.rs:51`,
+`finalize.rs:37`, `sync.rs:164`, `liveness.rs:64` and `:190` — or, worst, at
+`state.rs:348`, which is the `info!` block logging "Voting power required". In the
+reviewer's words: *"A consensus node that aborts while logging is the worst version of this
+failure."*
+
+**This is the third round running of the same pattern**: a guard living in a method while
+the field stays public. F-25 was `State`'s mutators, F-22-open-1 was `State`'s fields, and
+this is `Params`. The lesson is now explicit: **a method guard on a public field is a
+comment, not an invariant.**
+
+**Fixed** by making the guarantee structural rather than conventional: `protocol` is
+private and `Params::classic` is the only constructor, so the classic consensus path cannot
+hold a protocol it does not implement — at construction or afterwards. `threshold_params()`
+is consequently **total**, with no `expect` at all, rather than fallible-but-unreachable.
+A `Params::fast` constructor belongs there when a fast driver exists.
+
+### F-30b — `Default::default()` at construction sites was weaker than I realised
+I had worried it would survive a change to `ConsensusProtocol`'s `Default`. The reviewer
+pointed out something sharper: `Default::default()` is **type-inferred**, so it survives a
+change to the FIELD'S TYPE as well. Moot now — the constructor takes the remaining fields
+explicitly and there is no protocol argument to get wrong.
+
+### F-30c — The Driver keeps its own threshold copy
+`core-driver/src/driver.rs:38`, set at `:96` and reused in `move_to_height` at `:146`. It is
+derived once and correct today, but it is the one place the single-source claim does not
+reach. With F-30a fixed it can no longer diverge, since nothing can change the protocol
+after construction. Recorded rather than changed.
+
+### F-30d — Nothing operator-facing can select a protocol, and two concrete obstacles
+`app/src/spawn.rs` hardcodes classic and never consults `cfg`, though every other field in
+that struct is derived from it. Before a TOML field can exist: **`crates/config` has no
+`malachitebft-core-types` dependency at all**, and the workspace entry does not enable its
+`serde` feature, so `ConsensusProtocol`'s feature-gated `serde` derive is unavailable to
+`Config`. Both must be added first. Noted at the call site rather than half-wired.
+
+### Q2 came back clean
+The reviewer checked every path rather than repeating my grep: all seven `threshold_params()`
+reads go through `Params`, the five `verify_*_certificate` helpers take it as a parameter
+from exactly those callers, and no `Deref`, re-export or macro reaches thresholds another
+way. No non-test `src` file constructs `ThresholdParams` or uses the raw constants.
+
+## F-31 — The fast driver exists
+
+- **Added in:** the same commit · **Not yet reviewed or modelled**
+- `core-driver/src/fast/` — the multiplexing neither the state machine nor the keeper can
+  do alone. Three of the paper's rules need something in between:
+  - **L27**: a re-proposal is offered only once the keeper confirms `2f+1` votes exist
+    *from the round the proposal names*. Without it the state machine would be asked to
+    trust a justification nobody verified.
+  - **L42**: the decision pairs a fresh proposal from one round with `n - f` votes from
+    another, so the driver retains fresh proposals for the whole height and pairs a quorum
+    with a proposal it may have seen rounds earlier. A quorum with no retained proposal
+    decides nothing rather than inventing a value.
+  - **L15-L16**: the state machine re-proposes an identifier; the driver resolves it back
+    to the value the original fresh proposal carried.
+- `FreshProposals` is keyed by identifier, not round, and is cleared per height rather than
+  pruned per round — a proposal from an early round stays relevant all height, because L42
+  lets the deciding quorum arrive in any later one.
+- 6 tests. **Next: independent review, then Studio**, per the working loop.
 
 ---
 

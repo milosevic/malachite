@@ -34,7 +34,14 @@ pub struct Params<Ctx: Context> {
     /// [`Params::threshold_params`] rather than stored alongside it. Storing both would
     /// let them disagree, and a `Fast` protocol paired with classic 2/3 thresholds would
     /// compile and run a fast node on classic quorums.
-    pub protocol: ConsensusProtocol,
+    ///
+    /// Private, and this is load-bearing rather than tidiness. While it was public a
+    /// caller could write `state.params.protocol = Fast` after construction, and the next
+    /// `threshold_params()` would abort — not at startup, but inside a handler, or inside
+    /// the `info!` block that logs the required voting power. Constructing a `Params` is
+    /// now the only way to choose, and [`Params::classic`] is the only constructor, so the
+    /// classic consensus path cannot hold a protocol it does not implement.
+    protocol: ConsensusProtocol,
 
     /// The messages required to deliver proposals
     pub value_payload: ValuePayload,
@@ -44,19 +51,39 @@ pub struct Params<Ctx: Context> {
 }
 
 impl<Ctx: Context> Params<Ctx> {
-    /// The classic quorum and honest thresholds, derived from [`Params::protocol`].
+    /// Parameters for a node running classic Tendermint.
     ///
-    /// # Panics
+    /// The only constructor, deliberately. This module is the classic consensus path, and
+    /// the fast protocol needs a driver that does not exist yet — so there is no way to
+    /// build a `Params` the rest of this crate cannot honour. A `fast` constructor belongs
+    /// here when that driver does, and `threshold_params` becomes fallible at that point.
+    pub fn classic(address: Ctx::Address, value_payload: ValuePayload, enabled: bool) -> Self {
+        Self {
+            address,
+            protocol: ConsensusProtocol::Classic,
+            value_payload,
+            enabled,
+        }
+    }
+
+    /// Which protocol this node runs.
+    pub fn protocol(&self) -> ConsensusProtocol {
+        self.protocol
+    }
+
+    /// The classic quorum and honest thresholds, derived from the protocol.
     ///
-    /// If the protocol is [`ConsensusProtocol::Fast`], which has no honest threshold and
-    /// therefore no `ThresholdParams` at all. That is a construction error rather than a
-    /// runtime condition: this whole module is the CLASSIC consensus path, and a fast node
-    /// needs a fast driver that does not exist yet. [`crate::State::new`] checks for it up
-    /// front so the failure lands at startup with a clear message, not inside a handler.
+    /// Total, not fallible: [`Params::classic`] is the only constructor and the field is
+    /// private, so the protocol is always `Classic` here. An earlier version derived the
+    /// same value through an `expect`, which was safe only by convention — the field was
+    /// public, so a caller could change it after construction and turn a logging statement
+    /// into an abort.
     pub fn threshold_params(&self) -> ThresholdParams {
-        self.protocol.classic_threshold_params().expect(
-            "the fast protocol has no classic thresholds; \
-             a fast node cannot run through the classic consensus path",
-        )
+        debug_assert_eq!(
+            self.protocol,
+            ConsensusProtocol::Classic,
+            "only Params::classic can build this type"
+        );
+        ThresholdParams::default()
     }
 }

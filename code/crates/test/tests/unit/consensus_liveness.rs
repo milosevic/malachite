@@ -80,12 +80,7 @@ async fn consensus_actor_terminates_on_start_height_error() {
 
     let consensus = Consensus::spawn(
         ctx,
-        ConsensusParams {
-            address: Address::new([0; 20]),
-            protocol: Default::default(),
-            value_payload: ValuePayload::ProposalAndParts,
-            enabled: true,
-        },
+        ConsensusParams::classic(Address::new([0; 20]), ValuePayload::ProposalAndParts, true),
         ConsensusConfig::default(),
         Box::new(Ed25519Verifier),
         None,

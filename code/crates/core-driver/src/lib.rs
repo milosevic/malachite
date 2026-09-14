@@ -21,6 +21,7 @@ mod input;
 mod mux;
 mod output;
 
+pub mod fast;
 pub mod proposal_keeper;
 
 pub use driver::Driver;

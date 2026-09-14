@@ -25,12 +25,7 @@ fn make_state(validators: &[Validator], my_addr: Address) -> State<TestContext> 
         TestContext::new(),
         Height::new(1),
         vs,
-        Params {
-            address: my_addr,
-            protocol: Default::default(),
-            value_payload: ValuePayload::ProposalOnly,
-            enabled: true,
-        },
+        Params::classic(my_addr, ValuePayload::ProposalOnly, true),
         1000,
         500,
     )
